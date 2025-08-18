@@ -13,9 +13,9 @@ ICON_CLOCK_FAST = "mdi:clock-fast"
 
 CONF_TRACKING_MODE = "tracking_mode"
 CONF_TRACKING_MODE_SELECTS = [
-    "Approaching and Retreating",
+    "Approaching and Restreating",
     "Approaching",
-    "Retreating",
+    "Restreating",
 ]
 ICON_RADAR = "mdi:radar"
 
@@ -42,14 +42,14 @@ async def to_code(config):
     if sample_rate_config := config.get(CONF_SAMPLE_RATE):
         sel = await select.new_select(
             sample_rate_config,
-            options=[CONF_SAMPLE_RATE_SELECTS],
+            options=CONF_SAMPLE_RATE_SELECTS,
         )
         await cg.register_parented(sel, config[CONF_LD2415H_ID])
         cg.add(ld2415h_component.set_sample_rate_select(sel))
     if tracking_mode_config := config.get(CONF_TRACKING_MODE):
         sel = await select.new_select(
             tracking_mode_config,
-            options=[CONF_TRACKING_MODE_SELECTS],
+            options=CONF_TRACKING_MODE_SELECTS,
         )
         await cg.register_parented(sel, config[CONF_LD2415H_ID])
         cg.add(ld2415h_component.set_tracking_mode_select(sel))

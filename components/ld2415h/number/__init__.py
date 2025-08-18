@@ -8,6 +8,7 @@ from esphome.const import (
     UNIT_EMPTY,
     UNIT_KILOMETER_PER_HOUR,
     UNIT_SECOND,
+    UNIT_MILLISECOND
 )
 from .. import CONF_LD2415H_ID, LD2415HComponent, ld2415h_ns
 
@@ -16,12 +17,14 @@ ICON_SENSITIVITY = "mdi:ear-hearing"
 ICON_SPEEDOMETER = "mdi:speedometer"
 ICON_TIMELAPSE = "mdi:timelapse"
 ICON_VIBRATE = "mdi:vibrate"
+ICON_TIMER = "mdi:timer"
 
 CONF_MIN_SPEED_THRESHOLD = "min_speed_threshold"
 CONF_COMPENSATION_ANGLE = "compensation_angle"
 CONF_VIBRATION_CORRECTION = "vibration_correction"
 CONF_RELAY_TRIGGER_DURATION = "relay_trigger_duration"
 CONF_RELAY_TRIGGER_SPEED = "relay_trigger_speed"
+CONF_TIMEOUT_DURATION = "timeout_duration"
 
 MinSpeedThresholdNumber = ld2415h_ns.class_("MinSpeedThresholdNumber", number.Number)
 CompensationAngleNumber = ld2415h_ns.class_("CompensationAngleNumber", number.Number)
@@ -33,6 +36,7 @@ RelayTriggerDurationNumber = ld2415h_ns.class_(
     "RelayTriggerDurationNumber", number.Number
 )
 RelayTriggerSpeedNumber = ld2415h_ns.class_("RelayTriggerSpeedNumber", number.Number)
+TimeoutDurationNumber = ld2415h_ns.class_("TimeoutDurationNumber", number.Number)
 
 CONFIG_SCHEMA = {
     cv.GenerateID(CONF_LD2415H_ID): cv.use_id(LD2415HComponent),
@@ -71,6 +75,12 @@ CONFIG_SCHEMA = {
         unit_of_measurement=UNIT_KILOMETER_PER_HOUR,
         entity_category=ENTITY_CATEGORY_CONFIG,
         icon=ICON_SPEEDOMETER,
+    ),
+     cv.Optional(CONF_TIMEOUT_DURATION): number.number_schema(
+        TimeoutDurationNumber,
+        unit_of_measurement=UNIT_MILLISECOND,
+        entity_category=ENTITY_CATEGORY_CONFIG,
+        icon=ICON_TIMER,
     ),
 }
 
@@ -131,3 +141,12 @@ async def to_code(config):
         )
         await cg.register_parented(num, config[CONF_LD2415H_ID])
         cg.add(ld2415h_component.set_relay_trigger_speed_number(num))
+    if timeout_config := config.get(CONF_TIMEOUT_DURATION):
+        num = await number.new_number(
+            timeout_config,
+            min_value=0,
+            max_value=2000,
+            step=100,
+        )
+        await cg.register_parented(num, config[CONF_LD2415H_ID])
+        cg.add(ld2415h_component.set_timeout_duration_number(num))

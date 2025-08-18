@@ -1,0 +1,557 @@
+Millimeter wave radar
+________________________________________________________________________________
+
+v
+
+HLK- LD2415H datasheet
+
+——
+
+Focus on the design and development of millimeter wave radar products
+
+This manual will describe the design principles, technical parameters, installation
+specifications and other matters of the HLK-LD2415H radar module to guide you to
+understand and use this radar product in detail. Our company reserves the right to make
+regular changes to the contents of this manual without prior notice. The changed content
+will be added to the new version of the product manual. Please contact our company in time
+to obtain the latest information.
+Version
+
+Date
+
+Page
+
+Involving chapters
+
+1.0
+
+2021.10.22
+
+7
+
+All
+
+2.0
+
+2023.10.22
+
+7
+
+All
+
+1
+
+1. Overview
+HLK-LD2415H speed radar is a millimeter wave radar module integrating microstrip
+antenna, radio frequency circuit and signal processing circuit, which directly outputs the
+speed information of the target. It can be used for long-distance car speed measurement
+up to 180 meters or more. It adopts integrated radio frequency chip, has extremely high
+frequency stability and speed measurement accuracy of 1KM/h.
+It is widely used in speed reminders on various roads such as highways, urban trunk
+lines, city and county highways, urban and rural trunk roads, as well as road curve and
+intersection warnings.
+
+2. Feature description
+◆ K-band radio frequency integrated circuit design;
+◆ Frequency range: 24.125GHz (customizable frequency)
+◆ Modulation method: CW detects moving vehicles, detection distance ≥180 meters
+◆Supports RS485 interface and TTL serial port (baud rate 9600bps)
+◆ Speed measurement range: 1KM/H ~240KM/H
+◆ The speed measurement error is less than ±1KM/H (when the angle between the
+movement direction and the radar beam azimuth is zero degrees)
+◆ Voltage: 9~24V, current ≤50mA@12V
+◆Output power (EIRP): 20dBm; actual power consumption ≤1.2W
+◆Antenna angle: horizontal 40°, pitch 16° (3dB beam width, actual detection angle is
+greater than 4 lanes)
+◆ Sensor size: 69*53*5mm
+
+3. Product effect
+
+Product PCBA renderings
+
+2
+
+4. Main parameters
+Parameters
+
+Symbol
+
+Minimum
+value
+
+Transmission frequency
+
+ƒ
+
+24.075
+
+Output Power ( EIRP)
+
+Pout
+
+Typical value Maximum
+value
+Transmitter
+
+Unit
+
+Explanation
+
+24.125
+
+24.175
+
+GHz
+
+Customizable
+
+18
+
+20
+
+dBm
+
+Customizable
+
+Antenna angle
+Transmitting antenna
+gain
+Receive antenna gain
+Transmitting antenna
+radiation angle
+Receive antenna
+radiation angle
+
+16
+
+dBi
+
+18.4
+
+dBi
+
+± 20
+
+deg
+
+Level
+
+±8
+
+deg
+
+Vertical
+
+± 20
+
+deg
+
+Level
+
+±8
+
+deg
+
+Vertical
+
+Power supply
+Operating voltage
+
+VCC
+
+Operating current
+
+ICC
+
+9
+
+12
+
+24
+
+50
+
+V
+A
+m
+
+Interface parameters
+Pulse interface
+
+VCC
+
+9
+
+12
+
+24
+
+V
+
+Environment
+Operating temperature
+
+TOP
+
+﹣ 20
+
++ 85
+
+℃
+
+Storage temperature
+
+TOP
+
+﹣ 40
+
++ 125
+
+℃
+
+Dimensions
+
+Length 69 x Width 53 x Height 5
+Module main technical parameters table
+
+Antenna pattern
+
+3
+
+mm
+
+5. Interface description
+
+Interface diagram (shown from the back of the module)
+
+When the early warning signal function is required, the radar can directly output a high
+-level active signal (pin 1) or a low-level active signal (pin 2).
+Serial number
+
+Pin name
+
+J4 description
+
+1
+
+Pin 1
+
+2
+
+Pin 2
+
+3
+
+UART_RX
+
+PULSE (The radar board is a high-level active output signal
+version: a high-level active output pin)
+AA (The radar board is the active low output signal version: active
+low output pin)
+Receive
+
+4
+
+UART_TX
+
+Send
+
+5
+
+B
+
+485 serial port data B
+
+6
+
+A
+
+485 serial port data A
+
+7
+
+GND
+
+Power ground
+
+8
+
+VCC
+
+9~24V power
+Interface function description table
+
+6. Communication protocol description
+RS485 and UART serial port (3.3V TTL level signal) speed data output format (baud rate
+9600bps, 9 bytes per frame data packet).
+
+6.1 ：Coming target
+V (ascii)
+
+＋
+
+(ascii) hundreds (ascii) tens (ascii) units (ascii) decimal point (ascii) decimal
+
+place (ascii) 0x0D0x0A
+
+4
+
+6.2 ：Going target
+V (ascii)
+
+－
+
+(ascii) hundreds (ascii) tens (ascii) units (ascii) decimal point (ascii) decimal
+
+place (ascii) 0x0D0x0A
+
+6.3 ：Radar parameter setting command
+0x43+0x46+0x01 function code
+Command
+format
+0x43+0x46+0x01+lower
+：
+compensation+sensitivity+0x0d+0x0a
+43 46 01 01 00 05 0d 0a
+Command
+Explanation
+Set speed
+range lower
+limit value,
+angle
+compensatio
+n, sensitivity
+
+limit
+
+value
+
+of
+
+speed
+
+range+angle
+
+Note 1 ：0x01 is the lower limit value of the speed range 1KM/H (Factory default
+is 0X01) ，If 0x01 is set, speeds less than 1km/h will not be detected and output.
+；
+Note 2 ： 0x00 is the angle compensation of the angle between the center of the
+radar beam axis and the movement of the moved target (car) (factory default is
+0x00). If 0x0a is set, the angle compensation angle is 10 degrees.；
+
+Note 3 ： 0x05 is the configurable range of radar sensitivity setting 0x01~0x0f
+(factory default is 0x05);
+the smaller the sensitivity value, the higher the sensitivity, so the longer the
+detection distance (poor anti-interference);
+the larger the sensitivity value, the lower the sensitivity, that is, so the closer the
+detection distance (strong anti-interference);
+if there is interference caused by a strong radio transmitting antenna near the radar
+sensor or the ripple coefficient of the radar sensor power supply is large, the
+sensitivity value needs to be appropriately increased to improve the antiinterference performance. Please make your own choice based on application
+conditions.
+0x43+0x46+0x02 function code
+Command format ： 0x43+0x46+0x02+coming/going target detection output+measurable speed output times per
+second+Kilometers per hour/miles per hour switch+0x0d+0x0a
+43 46 02 00 01 00 0d 0a
+Command
+Set the
+Explanation Note 1 ： 0x00 0x00 detects and outputs for both coming and going targets; 0X01
+coming/
+only detects and outputs coming targets; 0X02 only detects and outputs going targets;
+going target
+Note 2 ： The larger the value of 0x01, the lower the number of times the radar
+detection
+sensor can measure speed per second; 0X00 is about 22 frames per second; each
+output,
+increment of 1 to the setting value increases the time by 1 times, if 0x01 is set, the
+measurable
+output is 11 frames per second (the factory default is 0X01, every (about 11 frames
+speed output
+times per
+per second);
+second,
+Note 3 ： The speed unit of 0x00 is kilometers per hour; the speed unit of 0x01 is
+kilometers
+miles per hour; the speed unit of 0x02 is meters per second;
+per
+hour/miles
+per hour
+switching
+0x43+0x46+0x03 function code
+
+Command format ：0x43+0x46+0x03+0x00+0x00+0x00+0x0d+0x0a
+Command
+
+43 46 03 00 00 00 0d 0a
+
+5
+
+Set the anti- Explanation Note 1 ：0x00 vibration interference generally refers to targets that move "back and
+interference
+forth" with small swings (such as speaker pronunciation, vibration of the mounting
+coefficient of
+bracket of the radar sensor itself, or interference from electric fans, etc.); the larger
+vibration
+the XU value range, the greater the anti-vibration swing, but It is easy to miss the
+interference
+target of short-stroke movement. Please adjust and make your own choices
+in the range
+according to the application scenario.
+0x00-0x70
+(factory
+default is
+0X00)
+0x43+0x46+0x04 function code (Only when using the photocoupler function)
+Command format ： 0x43+0x46+0x04+relay closing time (seconds)+the minimum speed value for the relay to
+close(km/h)+0x00+0x0d+0x0a
+43 46 04 00 00 00 0d 0a
+Command
+Set
+parameters
+for relay
+output
+
+Explanation
+
+Note 1 ： 0x00 setting range 0x00~0xff; Default value 0; When the speed value
+exceeds 00, the photocoupler pull-in time (seconds);
+
+Note 2 ： 0x00 setting range 0x00~0xff; default value 0; minimum speed value
+(km/h) for photocoupler pickup.
+0x43+0x46+0x05+0x01 function code
+Command format：0x43+0x46+0x05+0x01+0x00+0x00+0x00+0x00+0x00+0x00+0x00
+Switch to
+custom
+protocol
+mode 01
+
+Command
+
+43 46 05 01 00 00 00 00 00 00 00
+
+Explanation
+
+Radar response:
+Switch to CSR Mode... Done.
+
+Switch to
+standard
+protocol
+mode 02
+
+Command
+
+FA 31 30 30 FB [Wait for Radar’s reply before sending the next one]
+FA 55 AA FF FB
+
+Explanation
+
+Radar response:
+Switch to CSR Mode... Done.
+0x43+0x46+0x07 function code
+Command format：0x43+0x46+0x07+0x00+0x00+0x00+0x00+0x00+0x00+0x00+0x00+0x00+0x00
+Command
+
+43 46 07 00 00 00 00 00 00 00 00 00 00
+
+(该命令仅在标准协议模式下适用)
+
+Explanation Radar response：
+No. ：20210726 v3.0
+X1:01 X2:00 X3:05 X4:00 X5:01 X6:00 X7:00 X8:00 X9:00 X0:01
+X1:Speed range lower limit value (default is 0X01) ： The lower limit value is
+1KM/H, which means that speeds less than 1km/h will not be detected and output);
+Read the set
+parameters
+
+X2:Angle compensation (default is 0x00) ： Angle compensation for the angle
+between the radar beam axis center and the movement of the moved target (car). If
+0x0a is set, the compensation angle is 10 degrees;
+X3:Sensitivity (default is 0x05) ：The setting range is 0x01~0x0f. The smaller the
+sensitivity value, the higher the sensitivity, which means the farther the detection
+distance (poor anti-interference). The larger the sensitivity value, the lower the
+sensitivity, which means the closer the detection distance (strong anti-interference);
+X4:Coming and going target detection (default is 0x00) ： 0x00 means detection
+output for both coming and going targets; 0X01 means detection output for only
+coming targets; 0X02 means detection output for only going targets;
+X5:Number of measurable speed outputs per second (default is 0x01) ： The larger
+the value, the lower the number of times the radar sensor can measure speed per
+second (0X00 means outputting about 22 frames per second). Each increment of 1
+increases the time by 1 times. If set to 01, 11 frames per second will be output;
+X6:Speed unit (default is 0x00)：The unit of 0x00 is kilometers per hour, the unit of
+6
+
+0x01 is miles per hour; the unit of 0x02 is meters per second;
+X7:Vibration anti-interference coefficient range: 0x00~0x70 (default is 0X00) ；
+X8:Optocoupler pickup time: default value is 00;
+X9:Minimum speed value that triggers optocoupler pickup: default valueis 00;
+X0:Protocol mode (default is 0X01) ： 0X01 represents standard protocol mode,
+0X02 represents customized protocol mode.
+
+6.4 ：Command setting example:
+
+43 46 01 03 0a 05 0d 0a
+
+Command A Example: The minimum detection speed is 3km/h, the
+
+angle correction is 10°, and the sensitivity is 5.
+43 46 02 01 02 00 0d 0a
+
+Command B example: Only incoming target detection is output,
+
+and the radar speed measurement data output is about 5.5 frames per second.
+The above are sample parameters. Please set the parameters according to the site conditions
+during actual installation. For example, if it is set to the incoming speed and there is a speed
+trigger when going, you can set the radar sensitivity. The default is 0x05 and increase
+upward (the larger the value, the lower the sensitivity) until there is no abnormal speed
+value.
+
+7
+
+7. Radar dedicated host computer description
+7.1 The radar needs to communicate with the computer through the RS485 USB switching tool.
+The positive and negative poles of the radar power supply need to be connected to a 12V DC
+power supply separately. After the radar is powered on, the red and green lights will flash three
+times continuously at the same time, indicating successful power on.
+
+7.2 Host computer interface description
+
+8
+
+9
+
+8. Product specifications
+8.1 Module size
+
+9. Installation Notes
+9.1 Recommended application scenarios:
+
+Install it on the left or right side of the road according to the direction of the road
+vehicles, as shown in the figure below, height: 1~2m; the recommended angle
+between the antenna emission surface and the road is less than 10°.
+
+10
+
+Radar installation diagram
+
+9.2 Other notes:
+◆This radar only detects relatively moving targets within the inspected area, and does not detect
+completely stationary targets. The output result is information such as the speed of the
+nearest/fastest target in relative motion within the detection area.
+◆ If there are obstructions such as water or metal in the radar emission direction that strongly
+reflect millimeter wave signals, the radar detection effect will be seriously affected.
+
+10. Contact
+
+Shenzhen Hi-Link Electronic Co.,Ltd
+
+Address: 1705, 17/F, Building E, XingheWORLD, Minle Community, Minzhi Street,
+Longhua District, Shenzhen
+Tel：0755-23152658/83575155
+Email: sales@hlktech.com
+Website: https://www.hlktech.net/
+THANKS.
+
+11
+
+

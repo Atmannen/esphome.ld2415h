@@ -129,44 +129,151 @@ Example:
     | X0    | Negotiation Mode: <br>**0x01** : Custom Agreement <br>**0x02** : Standard Protocol |
 
 
-## ESPHome Example Configuration
+## ESPHome ESP8266 Example Configuration
 
 Example yaml to use in esphome device config:
 
 ```yaml
+wifi:
+  ssid: [REPLACE ME]
+  password: [REPLACE ME]
+
+esphome:
+  name: esphome-web-xxxxxxx
+  friendly_name: Radar
+  min_version: 2024.11.0
+  name_add_mac_suffix: false
+  on_boot:
+    priority: 600  # Run after WiFi, before user logic
+    then: # Set the default configuration on boot here
+      - number.set: { id: compensation_angle, value: 8 }
+      - number.set: { id: sensitivity, value: 5 }
+      - number.set: { id: min_speed_threshold, value: 20 }
+      - number.set: { id: vibration_correction, value: 5 }
+      - number.set: { id: relay_trigger_duration, value: 3 }
+      - number.set: { id: relay_trigger_speed, value: 1 }
+      - number.set: { id: timeout_duration, value: 400 }
+
+esp8266:
+  board: esp01_1m
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  reboot_timeout: 0s
+
+# Optional MQTT Support
+#mqtt:
+#  broker: [broker ip/domain]
+#  username: [REPLACE ME]
+#  password: [REPLACE ME]
+
+# Allow Over-The-Air updates
+ota:
+- platform: esphome
+
+web_server:
+  port: 80
+
 external_components:
   - source:
-      url: https://github.com/cptskippy/esphome.ld2415h
+      url: https://github.com/dermodmaster/esphome.ld2415h
       type: git
       ref: main
-    components: ld2415h
+    components: [ld2415h]
     refresh: 0s
 
 uart:
-  tx_pin: 36
-  rx_pin: 34
+  tx_pin: GPIO12
+  rx_pin: GPIO14
   baud_rate: 9600
+  
+ld2415h:
+  id: radar
 
+# Define all sensors to be handled
 sensor:
   - platform: ld2415h
-    speed: # This is the absolute speed of the object
-      name: Speed
+    ld2415h_id: radar
+    speed:
+      name: "Speed"
       filters:
-        # Sensor reports on speed down to 1km/h
-        # we must zero out the speed manually
-        # when the sensor stops reporting.
         - timeout:
             timeout: 0.1s
             value: 0
-        # Sensor will constantly report speed
-        # at the confgiured sample rate
-        # this ensures we only report changes
         - delta: 0.1
-    velocity: # This value is signed indicating approaching or retreating
-      name: Velocity
+    approaching_speed:
+      name: "Approaching Speed"
       filters:
         - timeout:
-            timeout: 1s
+            timeout: 0.1s
             value: 0
         - delta: 0.1
+    departing_speed:
+      name: "Departing Speed"
+      filters:
+        - timeout:
+            timeout: 0.1s
+            value: 0
+        - delta: 0.1
+    approaching_last_max_speed: # fires max speed if no new measurement is incoming for x ms. (default: 400ms)
+      name: "Approaching Last Max Speed"
+    departing_last_max_speed:
+      name: "Departing Last Max Speed"
+
+
+
+# Numbers for all radar settings
+number:
+  - platform: ld2415h
+    ld2415h_id: radar
+
+    # Compensation Angle (0-90 degrees)
+    compensation_angle:
+      name: "Compensation Angle"
+      id: compensation_angle
+
+    # Sensitivity (0-15)
+    sensitivity:
+      name: "Sensitivity"
+      id: sensitivity
+
+    # Minimum Speed Threshold (1-60 km/h)
+    min_speed_threshold:
+      name: "Min Speed Threshold"
+      id: min_speed_threshold
+
+    # Vibration Correction (0-112)
+    vibration_correction:
+      name: "Vibration Correction"
+      id: vibration_correction
+
+    # Relay Trigger Duration (0–255 seconds)
+    relay_trigger_duration:
+      name: "Relay Trigger Duration"
+      id: relay_trigger_duration
+
+    # Relay Trigger Speed (0–255 km/h)
+    relay_trigger_speed:
+      name: "Relay Trigger Speed"
+      id: relay_trigger_speed
+
+    # Relay timeout for firing max speeed measurements if no new measurement was seen for x ms
+    timeout_duration:
+      name: "Radar Timeout (ms)"
+      id: timeout_duration
+
+# Settings with selections
+select:
+  - platform: ld2415h
+    ld2415h_id: radar
+    tracking_mode:
+      name: "Tracking Mode"
+    sample_rate:
+      name: "Sample Rate"
+
+
+
 ```

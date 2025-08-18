@@ -1,0 +1,235 @@
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Speed-Trap-40 Fallback Hotspot"
+    password: "redacted"
+
+captive_portal:
+
+esphome:
+  name: speed-trap-40
+  friendly_name: Speed trap 40
+  min_version: 2024.11.0
+  name_add_mac_suffix: false
+  on_boot:
+    priority: 600  # Run after WiFi, before user logic
+    then: # Set the default configuration on boot here
+      - number.set: { id: compensation_angle, value: 8 }
+      - number.set: { id: sensitivity, value: 5 }
+      - number.set: { id: min_speed_threshold, value: 0 }
+      - number.set: { id: vibration_correction, value: 5 }
+      - number.set: { id: relay_trigger_duration, value: 3 }
+      - number.set: { id: relay_trigger_speed, value: 1 }
+      - number.set: { id: timeout_duration, value: 400 }
+      # First send init command before other settings
+      - uart.write: [0x43, 0x46, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      # Wait a moment
+      - delay: 1s
+
+esp8266:
+  board: esp01_1m
+
+# Enable logging
+logger:
+  baud_rate: 0  # Disable logging over serial since using GPIO1/3 for UART
+  level: DEBUG
+  logs:
+    ld2415h: DEBUG
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "redacted"
+  reboot_timeout: 0s
+
+# Optional MQTT Support
+#mqtt:
+#  broker: [broker ip/domain]
+#  username: [REPLACE ME]
+#  password: [REPLACE ME]
+
+# Allow Over-The-Air updates
+ota:
+- platform: esphome
+  password: "redacted"
+
+web_server:
+  port: 80
+
+font:
+  - file: "gfonts://Roboto"
+    id: gfont_font
+    size: 14
+
+external_components:
+  - source:
+      url: https://github.com/dermodmaster/esphome.ld2415h
+      type: git
+      ref: main
+    components: [ld2415h]
+    refresh: 0s
+
+uart:
+  id: uart_bus
+  tx_pin: GPIO01  # Use GPIO1 and GPIO3 for your NodeMCU setup
+  rx_pin: GPIO03  # Make sure these match your physical connections
+  baud_rate: 9600
+  data_bits: 8
+  stop_bits: 1
+  parity: NONE
+  debug:
+    direction: BOTH
+    dummy_receiver: false
+  
+ld2415h:
+  id: radar
+  protocol_mode: auto  # Can be "auto", "ascii", or "binary"
+
+# Define all sensors to be handled
+sensor:
+  - platform: ld2415h
+    ld2415h_id: radar
+    speed:
+      id: radar_speed
+      name: "Speed"
+      filters:
+        - timeout:
+            timeout: 0.1s
+            value: 0
+        - delta: 0.1
+    approaching_speed:
+      name: "Approaching Speed"
+      filters:
+        - timeout:
+            timeout: 0.1s
+            value: 0
+        - delta: 0.1
+    departing_speed:
+      name: "Departing Speed"
+      filters:
+        - timeout:
+            timeout: 0.1s
+            value: 0
+        - delta: 0.1
+    approaching_last_max_speed: # fires max speed if no new measurement is incoming for x ms. (default: 400ms)
+      name: "Approaching Last Max Speed"
+    departing_last_max_speed:
+      name: "Departing Last Max Speed"
+    
+    # Vehicle tracking sensors
+    approaching_vehicle_count:
+      id: approaching_vehicle_count
+      name: "Approaching Vehicle Count"
+    departing_vehicle_count:
+      id: departing_vehicle_count
+      name: "Departing Vehicle Count"
+    current_approaching_vehicle_speed:
+      id: current_approaching_vehicle_speed
+      name: "Current Approaching Vehicle Speed"
+    current_departing_vehicle_speed:
+      id: current_departing_vehicle_speed
+      name: "Current Departing Vehicle Speed"
+
+
+
+# Numbers for all radar settings
+number:
+  - platform: ld2415h
+    ld2415h_id: radar
+
+    # Compensation Angle (0-90 degrees)
+    compensation_angle:
+      name: "Compensation Angle"
+      id: compensation_angle
+
+    # Sensitivity (0-15)
+    sensitivity:
+      name: "Sensitivity"
+      id: sensitivity
+
+    # Minimum Speed Threshold (1-60 km/h)
+    min_speed_threshold:
+      name: "Min Speed Threshold"
+      id: min_speed_threshold
+
+    # Vibration Correction (0-112)
+    vibration_correction:
+      name: "Vibration Correction"
+      id: vibration_correction
+
+    # Relay Trigger Duration (0–255 seconds)
+    relay_trigger_duration:
+      name: "Relay Trigger Duration"
+      id: relay_trigger_duration
+
+    # Relay Trigger Speed (0–255 km/h)
+    relay_trigger_speed:
+      name: "Relay Trigger Speed"
+      id: relay_trigger_speed
+
+    # Relay timeout for firing max speeed measurements if no new measurement was seen for x ms
+    timeout_duration:
+      name: "Radar Timeout (ms)"
+      id: timeout_duration
+
+# Settings with selections
+select:
+  - platform: ld2415h
+    ld2415h_id: radar
+    tracking_mode:
+      name: "Tracking Mode"
+    sample_rate:
+      name: "Sample Rate"
+
+# I2C Configuration for HW364A OLED
+i2c:
+  sda: GPIO14
+  scl: GPIO12
+  scan: true # Enable to detect I2C devices
+  frequency: 400kHz
+
+# OLED Display Configuration
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128X64" # Adjust if your display has a different resolution
+    address: 0x3C
+    id: hw364a_display
+    update_interval: 100ms  # Update display more frequently for vehicle tracking
+    pages:
+      - id: page1
+        lambda: |-
+          // Display title
+          it.printf(0, 0, id(gfont_font), "Speed Trap 40");
+          
+          // Current overall speed (legacy display)
+          it.printf(0, 14, id(gfont_font), "Current: %.1f km/h", id(radar_speed).state);
+          
+          // Vehicle counts
+          it.printf(0, 28, id(gfont_font), "Cars: A%d D%d", 
+            (int)id(approaching_vehicle_count).state, 
+            (int)id(departing_vehicle_count).state);
+          
+          // Current vehicle speeds
+          float approaching_speed = id(current_approaching_vehicle_speed).state;
+          float departing_speed = id(current_departing_vehicle_speed).state;
+          
+          // Show approaching vehicle if active
+          if (approaching_speed > 0) {
+            it.printf(0, 42, id(gfont_font), "→ %.1f km/h", approaching_speed);
+          }
+          
+          // Show departing vehicle if active  
+          if (departing_speed > 0) {
+            it.printf(0, 56, id(gfont_font), "← %.1f km/h", departing_speed);
+          }
+          
+          // If both vehicles present, show "OVERTAKE" indicator
+          if (approaching_speed > 0 && departing_speed > 0) {
+            it.printf(70, 42, id(gfont_font), "OVER");
+            it.printf(70, 56, id(gfont_font), "TAKE");
+          }
+
+
