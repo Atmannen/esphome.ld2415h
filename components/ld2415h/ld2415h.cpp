@@ -22,27 +22,6 @@ LD2415HComponent::LD2415HComponent()
       cmd_config_{0x43, 0x46, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00} {}
 
 void LD2415HComponent::setup() {
-  // Switch sensor to Standard Protocol mode (Mode 2)
-  ESP_LOGI(TAG, "Switching LD2415H to Standard Protocol mode...");
-  
-  // First call for Mode 2 (Standard Protocol)
-  const uint8_t cmd_mode2_first[] = {0xfa, 0x31, 0x30, 0x3d, 0xfb};
-  ESP_LOGI(TAG, "Sending first Standard Protocol command...");
-  this->write_array(cmd_mode2_first, sizeof(cmd_mode2_first));
-  delay(100);
-  
-  // Second call for Mode 2 (Standard Protocol)
-  const uint8_t cmd_mode2_second[] = {0xfa, 0x55, 0xaa, 0xff, 0xfb};
-  ESP_LOGI(TAG, "Sending second Standard Protocol command...");
-  this->write_array(cmd_mode2_second, sizeof(cmd_mode2_second));
-  delay(100);
-  
-  // Alternative: Try the 0x05 command with 0x02 parameter for Standard Protocol
-  const uint8_t cmd_standard_protocol[] = {0x43, 0x46, 0x05, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0x0a};
-  ESP_LOGI(TAG, "Sending alternative Standard Protocol command...");
-  this->issue_command_(cmd_standard_protocol, sizeof(cmd_standard_protocol));
-  delay(200);
-  
   // This triggers current sensor configurations to be dumped
   this->update_config_ = true;
   
@@ -61,6 +40,7 @@ void LD2415HComponent::setup() {
   
   ESP_LOGI(TAG, "LD2415H Component initialized and ready for data");
   ESP_LOGI(TAG, "Waiting for sensor packets...");
+  ESP_LOGI(TAG, "Using hex-to-ASCII parser to handle binary protocol data");
   
   // Log sensor entity details for debugging Home Assistant connectivity
   if (this->speed_sensor_) {
@@ -186,32 +166,63 @@ void LD2415HComponent::loop() {
       is_binary_protocol_ = true;
       ESP_LOGD(TAG, "Processing binary protocol data (buffer size: %zu)", binary_buffer_.size());
       
-      if (binary_buffer_.size() >= 9) {
-        // Look for complete 9-byte packets ending with 0x0D 0x0A
+      if (binary_buffer_.size() >= 7) {
+        // Look for 0x56 ('V') byte followed by speed data
         bool packet_found = false;
-        for (size_t i = 0; i <= binary_buffer_.size() - 9; i++) {
-          if (binary_buffer_[i + 7] == 0x0D && binary_buffer_[i + 8] == 0x0A) {
-            std::vector<uint8_t> packet(binary_buffer_.begin() + i, binary_buffer_.begin() + i + 9);
+        for (size_t i = 0; i <= binary_buffer_.size() - 7; i++) {
+          if (binary_buffer_[i] == 0x56) { // Found 'V'
+            ESP_LOGI(TAG, "Found 'V' (0x56) at offset %zu", i);
             
-            // Log binary packet found
-            ESP_LOGI(TAG, "Found binary packet at offset %zu:", i);
-            std::string packet_hex;
-            for (uint8_t b : packet) {
-              char hex_str[4];
-              snprintf(hex_str, sizeof(hex_str), "%02X ", b);
-              packet_hex += hex_str;
+            // Check if we have enough bytes for a complete packet (V + direction + 3 digits + . + 1 digit = 7 bytes minimum)
+            if (i + 7 <= binary_buffer_.size()) {
+              std::vector<uint8_t> packet(binary_buffer_.begin() + i, binary_buffer_.begin() + i + 7);
+              
+              // Log the raw packet
+              std::string packet_hex;
+              std::string packet_ascii;
+              for (uint8_t b : packet) {
+                char hex_str[4];
+                snprintf(hex_str, sizeof(hex_str), "%02X ", b);
+                packet_hex += hex_str;
+                packet_ascii += (b >= 0x20 && b <= 0x7E) ? (char)b : '.';
+              }
+              ESP_LOGI(TAG, "  Raw packet: %s", packet_hex.c_str());
+              ESP_LOGI(TAG, "  ASCII interpretation: %s", packet_ascii.c_str());
+              
+              // Try to parse as speed data
+              if (parse_hex_speed_packet_(packet)) {
+                binary_buffer_.erase(binary_buffer_.begin(), binary_buffer_.begin() + i + 7);
+                packet_found = true;
+                break;
+              } else {
+                // Try with more bytes (up to 9 bytes total for V+sign+XXX.X+CR+LF)
+                if (i + 9 <= binary_buffer_.size()) {
+                  std::vector<uint8_t> extended_packet(binary_buffer_.begin() + i, binary_buffer_.begin() + i + 9);
+                  
+                  std::string ext_packet_hex;
+                  std::string ext_packet_ascii;
+                  for (uint8_t b : extended_packet) {
+                    char hex_str[4];
+                    snprintf(hex_str, sizeof(hex_str), "%02X ", b);
+                    ext_packet_hex += hex_str;
+                    ext_packet_ascii += (b >= 0x20 && b <= 0x7E) ? (char)b : '.';
+                  }
+                  ESP_LOGI(TAG, "  Extended packet: %s", ext_packet_hex.c_str());
+                  ESP_LOGI(TAG, "  Extended ASCII: %s", ext_packet_ascii.c_str());
+                  
+                  if (parse_hex_speed_packet_(extended_packet)) {
+                    binary_buffer_.erase(binary_buffer_.begin(), binary_buffer_.begin() + i + 9);
+                    packet_found = true;
+                    break;
+                  }
+                }
+              }
             }
-            ESP_LOGI(TAG, "  Binary packet: %s", packet_hex.c_str());
-            
-            parse_binary_speed_(packet);
-            binary_buffer_.erase(binary_buffer_.begin(), binary_buffer_.begin() + i + 9);
-            packet_found = true;
-            break;
           }
         }
         
         if (!packet_found) {
-          ESP_LOGW(TAG, "No valid binary packet found in buffer (size: %zu)", binary_buffer_.size());
+          ESP_LOGD(TAG, "No valid 'V' packet found in buffer (size: %zu)", binary_buffer_.size());
           // Log current buffer contents for debugging
           std::string buffer_hex;
           for (size_t i = 0; i < std::min(binary_buffer_.size(), size_t(20)); i++) {
@@ -219,7 +230,7 @@ void LD2415HComponent::loop() {
             snprintf(hex_str, sizeof(hex_str), "%02X ", binary_buffer_[i]);
             buffer_hex += hex_str;
           }
-          ESP_LOGW(TAG, "  Buffer contents: %s%s", buffer_hex.c_str(), binary_buffer_.size() > 20 ? "..." : "");
+          ESP_LOGV(TAG, "  Buffer contents: %s%s", buffer_hex.c_str(), binary_buffer_.size() > 20 ? "..." : "");
         }
         
         // Keep buffer size manageable
@@ -689,6 +700,74 @@ void LD2415HComponent::parse_binary_speed_(const std::vector<uint8_t> &data) {
   
   ESP_LOGI(TAG, "Binary speed parsed successfully:");
   ESP_LOGI(TAG, "  Speed: %.3f km/h", speed);
+  ESP_LOGI(TAG, "  Direction: %s", is_approaching ? "approaching" : "departing");
+  ESP_LOGI(TAG, "  Velocity: %.3f km/h", this->velocity_);
+
+  this->publish_all_sensors_();
+}
+
+bool LD2415HComponent::parse_hex_speed_packet_(const std::vector<uint8_t> &data) {
+  ESP_LOGI(TAG, "Parsing hex speed packet (%zu bytes)", data.size());
+  
+  if (data.size() < 7 || data[0] != 0x56) {
+    ESP_LOGW(TAG, "Invalid hex packet: size %zu or doesn't start with 'V' (0x56)", data.size());
+    return false;
+  }
+  
+  // Convert hex bytes to ASCII string for easier parsing
+  std::string ascii_data;
+  for (size_t i = 0; i < data.size(); i++) {
+    if (data[i] >= 0x20 && data[i] <= 0x7E) { // Printable ASCII
+      ascii_data += (char)data[i];
+    } else if (data[i] == 0x0D || data[i] == 0x0A) {
+      // Carriage return or line feed - end of packet
+      break;
+    } else {
+      ESP_LOGV(TAG, "Non-printable byte at position %zu: 0x%02X", i, data[i]);
+    }
+  }
+  
+  ESP_LOGI(TAG, "ASCII interpretation: '%s'", ascii_data.c_str());
+  
+  if (ascii_data.length() < 6) { // At least "V+0.0" or "V-0.0"
+    ESP_LOGW(TAG, "ASCII data too short: '%s'", ascii_data.c_str());
+    return false;
+  }
+  
+  // Check for valid direction character
+  char direction = ascii_data[1];
+  if (direction != '+' && direction != '-') {
+    ESP_LOGW(TAG, "Invalid direction character: '%c' (expected + or -)", direction);
+    return false;
+  }
+  
+  bool is_approaching = (direction == '+');
+  
+  // Extract speed portion (everything after the direction character)
+  std::string speed_str = ascii_data.substr(2);
+  
+  // Parse the speed value
+  float speed = 0.0f;
+  if (sscanf(speed_str.c_str(), "%f", &speed) != 1) {
+    ESP_LOGW(TAG, "Failed to parse speed from: '%s'", speed_str.c_str());
+    return false;
+  }
+  
+  ESP_LOGI(TAG, "Hex speed parsed successfully:");
+  ESP_LOGI(TAG, "  ASCII packet: '%s'", ascii_data.c_str());
+  ESP_LOGI(TAG, "  Direction: %s (%c)", is_approaching ? "approaching" : "departing", direction);
+  ESP_LOGI(TAG, "  Speed: %.3f km/h", speed);
+  
+  // Update sensor values
+  this->approaching_ = is_approaching;
+  this->velocity_ = is_approaching ? speed : -speed;
+  this->speed_ = speed;
+  
+  ESP_LOGI(TAG, "  Final velocity: %.3f km/h", this->velocity_);
+  
+  this->publish_all_sensors_();
+  return true;
+}
   ESP_LOGI(TAG, "  Approaching: %s", is_approaching ? "yes" : "no");
   ESP_LOGI(TAG, "  Velocity: %.3f", this->velocity_);
   

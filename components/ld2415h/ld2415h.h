@@ -199,6 +199,7 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   void parse_firmware_();
   void parse_speed_();
   void parse_binary_speed_(const std::vector<uint8_t> &data);
+  bool parse_hex_speed_packet_(const std::vector<uint8_t> &data);
   void parse_config_param_(char *key, char *value);
   
   // Sensor publishing with detailed logging
