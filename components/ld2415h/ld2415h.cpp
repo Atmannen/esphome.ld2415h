@@ -22,6 +22,27 @@ LD2415HComponent::LD2415HComponent()
       cmd_config_{0x43, 0x46, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00} {}
 
 void LD2415HComponent::setup() {
+  // Switch sensor to Standard Protocol mode (Mode 2)
+  ESP_LOGI(TAG, "Switching LD2415H to Standard Protocol mode...");
+  
+  // First call for Mode 2 (Standard Protocol)
+  const uint8_t cmd_mode2_first[] = {0xfa, 0x31, 0x30, 0x3d, 0xfb};
+  ESP_LOGI(TAG, "Sending first Standard Protocol command...");
+  this->write_array(cmd_mode2_first, sizeof(cmd_mode2_first));
+  delay(100);
+  
+  // Second call for Mode 2 (Standard Protocol)
+  const uint8_t cmd_mode2_second[] = {0xfa, 0x55, 0xaa, 0xff, 0xfb};
+  ESP_LOGI(TAG, "Sending second Standard Protocol command...");
+  this->write_array(cmd_mode2_second, sizeof(cmd_mode2_second));
+  delay(100);
+  
+  // Alternative: Try the 0x05 command with 0x02 parameter for Standard Protocol
+  const uint8_t cmd_standard_protocol[] = {0x43, 0x46, 0x05, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0x0a};
+  ESP_LOGI(TAG, "Sending alternative Standard Protocol command...");
+  this->issue_command_(cmd_standard_protocol, sizeof(cmd_standard_protocol));
+  delay(200);
+  
   // This triggers current sensor configurations to be dumped
   this->update_config_ = true;
   
