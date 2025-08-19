@@ -703,7 +703,34 @@ void LD2415HComponent::parse_binary_speed_(const std::vector<uint8_t> &data) {
   ESP_LOGI(TAG, "  Direction: %s", is_approaching ? "approaching" : "departing");
   ESP_LOGI(TAG, "  Velocity: %.3f km/h", this->velocity_);
 
-  this->publish_all_sensors_();
+  // Publish sensor data
+  if (this->speed_sensor_ != nullptr) {
+    ESP_LOGI(TAG, "Publishing to speed sensor: %.3f km/h", this->speed_);
+    this->publish_sensor_state_(this->speed_sensor_, this->speed_, "Speed Sensor (Binary)");
+  }
+
+  if (this->approaching_) {
+    if (this->approaching_speed_sensor_ != nullptr) {
+      ESP_LOGI(TAG, "Publishing to approaching speed sensor: %.3f km/h", this->speed_);
+      this->publish_sensor_state_(this->approaching_speed_sensor_, this->speed_, "Approaching Speed Sensor (Binary)");
+      this->last_approaching_update_time_ = millis();
+    }
+  } else {
+    if (this->departing_speed_sensor_ != nullptr) {
+      ESP_LOGI(TAG, "Publishing to departing speed sensor: %.3f km/h", this->speed_);
+      this->publish_sensor_state_(this->departing_speed_sensor_, this->speed_, "Departing Speed Sensor (Binary)");
+      this->last_departing_update_time_ = millis();
+    }
+  }
+
+  if (this->velocity_sensor_ != nullptr) {
+    ESP_LOGI(TAG, "Publishing to velocity sensor: %.3f", this->velocity_);
+    this->publish_sensor_state_(this->velocity_sensor_, this->velocity_, "Velocity Sensor (Binary)");
+  }
+
+  // Process vehicle tracking
+  ESP_LOGI(TAG, "Processing vehicle detection with speed=%.3f, approaching=%s", this->speed_, this->approaching_ ? "yes" : "no");
+  this->process_vehicle_detection_(this->speed_, this->approaching_);
 }
 
 bool LD2415HComponent::parse_hex_speed_packet_(const std::vector<uint8_t> &data) {
@@ -765,61 +792,36 @@ bool LD2415HComponent::parse_hex_speed_packet_(const std::vector<uint8_t> &data)
   
   ESP_LOGI(TAG, "  Final velocity: %.3f km/h", this->velocity_);
   
-  this->publish_all_sensors_();
-  return true;
-}
-  ESP_LOGI(TAG, "  Approaching: %s", is_approaching ? "yes" : "no");
-  ESP_LOGI(TAG, "  Velocity: %.3f", this->velocity_);
-  
-  // Update sensors with the parsed speed (same logic as ASCII parsing)
+  // Publish sensor data
   if (this->speed_sensor_ != nullptr) {
     ESP_LOGI(TAG, "Publishing to speed sensor: %.3f km/h", this->speed_);
-    this->publish_sensor_state_(this->speed_sensor_, this->speed_, "Speed Sensor (Binary)");
-  } else {
-    ESP_LOGW(TAG, "Speed sensor is null, cannot publish");
+    this->publish_sensor_state_(this->speed_sensor_, this->speed_, "Speed Sensor (Hex)");
   }
 
   if (this->approaching_) {
     if (this->approaching_speed_sensor_ != nullptr) {
       ESP_LOGI(TAG, "Publishing to approaching speed sensor: %.3f km/h", this->speed_);
-      this->publish_sensor_state_(this->approaching_speed_sensor_, this->speed_, "Approaching Speed Sensor (Binary)");
+      this->publish_sensor_state_(this->approaching_speed_sensor_, this->speed_, "Approaching Speed Sensor (Hex)");
       this->last_approaching_update_time_ = millis();
-    
-      // Update last max speed
-      if (this->speed_ > this->last_max_approaching_speed_) {
-        ESP_LOGI(TAG, "New max approaching speed: %.3f km/h (was %.3f)", this->speed_, this->last_max_approaching_speed_);
-        this->last_max_approaching_speed_ = this->speed_;
-      }
-    } else {
-      ESP_LOGW(TAG, "Approaching speed sensor is null, cannot publish");
     }
   } else {
-    // Handle departing speed
     if (this->departing_speed_sensor_ != nullptr) {
       ESP_LOGI(TAG, "Publishing to departing speed sensor: %.3f km/h", this->speed_);
-      this->publish_sensor_state_(this->departing_speed_sensor_, this->speed_, "Departing Speed Sensor (Binary)");
+      this->publish_sensor_state_(this->departing_speed_sensor_, this->speed_, "Departing Speed Sensor (Hex)");
       this->last_departing_update_time_ = millis();
-    
-      // Update last max speed
-      if (this->speed_ > this->last_max_departing_speed_) {
-        ESP_LOGI(TAG, "New max departing speed: %.3f km/h (was %.3f)", this->speed_, this->last_max_departing_speed_);
-        this->last_max_departing_speed_ = this->speed_;
-      }
-    } else {
-      ESP_LOGW(TAG, "Departing speed sensor is null, cannot publish");
     }
   }
 
   if (this->velocity_sensor_ != nullptr) {
     ESP_LOGI(TAG, "Publishing to velocity sensor: %.3f", this->velocity_);
-    this->publish_sensor_state_(this->velocity_sensor_, this->velocity_, "Velocity Sensor (Binary)");
-  } else {
-    ESP_LOGW(TAG, "Velocity sensor is null, cannot publish");
+    this->publish_sensor_state_(this->velocity_sensor_, this->velocity_, "Velocity Sensor (Hex)");
   }
-  
+
   // Process vehicle tracking
   ESP_LOGI(TAG, "Processing vehicle detection with speed=%.3f, approaching=%s", this->speed_, this->approaching_ ? "yes" : "no");
   this->process_vehicle_detection_(this->speed_, this->approaching_);
+  
+  return true;
 }
 
 void LD2415HComponent::parse_config_param_(char *key, char *value) {
