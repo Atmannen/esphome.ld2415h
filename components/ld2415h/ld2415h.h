@@ -44,14 +44,14 @@ struct Vehicle {
   Vehicle() : id(0), max_speed(0), last_speed(0), first_detection_time(0), 
               last_detection_time(0), is_approaching(false), is_active(false) {}
 };
-/*
+
 class LD2415HListener {
  public:
   virtual void on_speed(double speed){};
   virtual void on_velocity(double velocity){};
   virtual void on_approach(bool approaching){};
 };
-*/
+
 class LD2415HComponent : public Component, public uart::UARTDevice {
  public:
   // Constructor declaration
