@@ -1,7 +1,6 @@
 #include "ld2415h.h"
 #include "esphome/core/log.h"
 #include <cmath>
-#include <stdexcept>
 
 namespace esphome {
 namespace ld2415h {
@@ -202,7 +201,6 @@ void LD2415HComponent::loop() {
           ESP_LOGW(TAG, "  Buffer contents: %s%s", buffer_hex.c_str(), binary_buffer_.size() > 20 ? "..." : "");
         }
         
-        
         // Keep buffer size manageable
         if (binary_buffer_.size() > 50) {
           ESP_LOGW(TAG, "Binary buffer growing too large (%zu bytes), trimming...", binary_buffer_.size());
@@ -270,26 +268,18 @@ bool LD2415HComponent::publish_sensor_state_(sensor::Sensor *sensor, float value
     ESP_LOGW(TAG, "Sensor %s has empty object_id - may not be properly configured", sensor_name);
   }
   
-  try {
-    // Publish the state
-    sensor->publish_state(value);
-    ESP_LOGI(TAG, "✓ Successfully published %.3f to %s", value, sensor_name);
-    
-    // Verify the state was set
-    if (sensor->has_state() && std::abs(sensor->get_state() - value) < 0.001) {
-      ESP_LOGI(TAG, "✓ Sensor state confirmed: %.3f", sensor->get_state());
-    } else {
-      ESP_LOGW(TAG, "⚠ Sensor state mismatch after publish: expected %.3f, got %.3f", value, sensor->get_state());
-    }
-    
-    return true;
-  } catch (const std::exception& e) {
-    ESP_LOGE(TAG, "✗ Exception publishing to %s: %s", sensor_name, e.what());
-    return false;
-  } catch (...) {
-    ESP_LOGE(TAG, "✗ Unknown exception publishing to %s", sensor_name);
-    return false;
+  // Publish the state
+  sensor->publish_state(value);
+  ESP_LOGI(TAG, "✓ Successfully published %.3f to %s", value, sensor_name);
+  
+  // Verify the state was set
+  if (sensor->has_state() && std::abs(sensor->get_state() - value) < 0.001) {
+    ESP_LOGI(TAG, "✓ Sensor state confirmed: %.3f", sensor->get_state());
+  } else {
+    ESP_LOGW(TAG, "⚠ Sensor state mismatch after publish: expected %.3f, got %.3f", value, sensor->get_state());
   }
+  
+  return true;
 }
 
 #ifdef USE_NUMBER
@@ -729,21 +719,6 @@ void LD2415HComponent::parse_binary_speed_(const std::vector<uint8_t> &data) {
   
   // Process vehicle tracking
   ESP_LOGI(TAG, "Processing vehicle detection with speed=%.3f, approaching=%s", this->speed_, this->approaching_ ? "yes" : "no");
-  this->process_vehicle_detection_(this->speed_, this->approaching_);
-}
-      this->last_departing_update_time_ = millis();
-    
-      // Update last max speed
-      if (this->speed_ > this->last_max_departing_speed_) {
-        this->last_max_departing_speed_ = this->speed_;
-      }
-    }
-  }
-
-  if (this->velocity_sensor_ != nullptr)
-    this->velocity_sensor_->publish_state(this->velocity_);
-  
-  // Process vehicle tracking
   this->process_vehicle_detection_(this->speed_, this->approaching_);
 }
 
