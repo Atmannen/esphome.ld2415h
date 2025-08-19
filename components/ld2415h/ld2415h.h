@@ -61,7 +61,7 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   void loop() override;
 
 #ifdef USE_NUMBER
-  void update() override;
+  void update();
   void set_min_speed_threshold_number(number::Number *number) { this->min_speed_threshold_number_ = number; };
   void set_compensation_angle_number(number::Number *number) { this->compensation_angle_number_ = number; };
   void set_sensitivity_number(number::Number *number) { this->sensitivity_number_ = number; };
