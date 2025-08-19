@@ -201,7 +201,7 @@ void LD2415HComponent::loop() {
           }
           ESP_LOGW(TAG, "  Buffer contents: %s%s", buffer_hex.c_str(), binary_buffer_.size() > 20 ? "..." : "");
         }
-        }
+        
         
         // Keep buffer size manageable
         if (binary_buffer_.size() > 50) {
