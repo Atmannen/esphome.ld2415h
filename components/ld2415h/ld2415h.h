@@ -174,6 +174,10 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   bool is_binary_protocol_{false};
   std::vector<uint8_t> binary_buffer_;
   
+  // Heartbeat for debugging
+  uint32_t last_heartbeat_time_{0};
+  uint32_t last_data_received_time_{0};
+  
   // Vehicle tracking
   std::vector<Vehicle> approaching_vehicles_;
   std::vector<Vehicle> departing_vehicles_;
@@ -196,6 +200,9 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   void parse_speed_();
   void parse_binary_speed_(const std::vector<uint8_t> &data);
   void parse_config_param_(char *key, char *value);
+  
+  // Sensor publishing with detailed logging
+  bool publish_sensor_state_(sensor::Sensor *sensor, float value, const char *sensor_name);
   
   // Vehicle tracking methods
   void process_vehicle_detection_(double speed, bool is_approaching);

@@ -1,6 +1,7 @@
 #include "ld2415h.h"
 #include "esphome/core/log.h"
 #include <cmath>
+#include <stdexcept>
 
 namespace esphome {
 namespace ld2415h {
@@ -24,6 +25,42 @@ LD2415HComponent::LD2415HComponent()
 void LD2415HComponent::setup() {
   // This triggers current sensor configurations to be dumped
   this->update_config_ = true;
+  
+  // Log which sensors are configured
+  ESP_LOGI(TAG, "LD2415H Sensor Configuration:");
+  ESP_LOGI(TAG, "  Speed sensor: %s", this->speed_sensor_ ? "configured" : "NOT configured");
+  ESP_LOGI(TAG, "  Approaching speed sensor: %s", this->approaching_speed_sensor_ ? "configured" : "NOT configured");
+  ESP_LOGI(TAG, "  Departing speed sensor: %s", this->departing_speed_sensor_ ? "configured" : "NOT configured");
+  ESP_LOGI(TAG, "  Velocity sensor: %s", this->velocity_sensor_ ? "configured" : "NOT configured");
+  ESP_LOGI(TAG, "  Approaching last max speed sensor: %s", this->approaching_last_max_speed_sensor_ ? "configured" : "NOT configured");
+  ESP_LOGI(TAG, "  Departing last max speed sensor: %s", this->departing_last_max_speed_sensor_ ? "configured" : "NOT configured");
+  ESP_LOGI(TAG, "  Approaching vehicle count sensor: %s", this->approaching_vehicle_count_sensor_ ? "configured" : "NOT configured");
+  ESP_LOGI(TAG, "  Departing vehicle count sensor: %s", this->departing_vehicle_count_sensor_ ? "configured" : "NOT configured");
+  ESP_LOGI(TAG, "  Current approaching vehicle speed sensor: %s", this->current_approaching_vehicle_speed_sensor_ ? "configured" : "NOT configured");
+  ESP_LOGI(TAG, "  Current departing vehicle speed sensor: %s", this->current_departing_vehicle_speed_sensor_ ? "configured" : "NOT configured");
+  
+  ESP_LOGI(TAG, "LD2415H Component initialized and ready for data");
+  ESP_LOGI(TAG, "Waiting for sensor packets...");
+  
+  // Log sensor entity details for debugging Home Assistant connectivity
+  if (this->speed_sensor_) {
+    ESP_LOGI(TAG, "Speed sensor details: object_id='%s', name='%s', internal=%s", 
+             this->speed_sensor_->get_object_id().c_str(), 
+             this->speed_sensor_->get_name().c_str(),
+             this->speed_sensor_->is_internal() ? "true" : "false");
+  }
+  if (this->approaching_speed_sensor_) {
+    ESP_LOGI(TAG, "Approaching speed sensor details: object_id='%s', name='%s', internal=%s", 
+             this->approaching_speed_sensor_->get_object_id().c_str(), 
+             this->approaching_speed_sensor_->get_name().c_str(),
+             this->approaching_speed_sensor_->is_internal() ? "true" : "false");
+  }
+  if (this->velocity_sensor_) {
+    ESP_LOGI(TAG, "Velocity sensor details: object_id='%s', name='%s', internal=%s", 
+             this->velocity_sensor_->get_object_id().c_str(), 
+             this->velocity_sensor_->get_name().c_str(),
+             this->velocity_sensor_->is_internal() ? "true" : "false");
+  }
 
 #ifdef USE_NUMBER
   this->min_speed_threshold_number_->publish_state(this->min_speed_threshold_);
@@ -59,7 +96,22 @@ void LD2415HComponent::dump_config() {
 void LD2415HComponent::loop() {
   // Process the stream from the sensor UART
   const uint32_t now = millis();
+  
+  // Heartbeat logging every 30 seconds to show component is alive
+  if (now - this->last_heartbeat_time_ > 30000) {
+    ESP_LOGI(TAG, "LD2415H heartbeat - component is alive and listening for data");
+    if (this->last_data_received_time_ > 0) {
+      ESP_LOGI(TAG, "  Last data received: %u ms ago", now - this->last_data_received_time_);
+    } else {
+      ESP_LOGI(TAG, "  No data received since startup");
+    }
+    this->last_heartbeat_time_ = now;
+  }
+  
   if (available()) {
+    // Update last data received time
+    this->last_data_received_time_ = now;
+    
     std::vector<uint8_t> raw_data;
     
     // Read all available data
@@ -71,17 +123,40 @@ void LD2415HComponent::loop() {
       }
     }
     
+    // Log raw data received for debugging
+    if (!raw_data.empty()) {
+      ESP_LOGV(TAG, "Raw data received (%zu bytes): ", raw_data.size());
+      std::string hex_dump;
+      std::string ascii_dump;
+      for (size_t i = 0; i < raw_data.size(); i++) {
+        char hex_str[4];
+        snprintf(hex_str, sizeof(hex_str), "%02X ", raw_data[i]);
+        hex_dump += hex_str;
+        
+        // ASCII representation
+        char c = (raw_data[i] >= 32 && raw_data[i] < 127) ? (char)raw_data[i] : '.';
+        ascii_dump += c;
+        
+        if ((i + 1) % 16 == 0 || i == raw_data.size() - 1) {
+          ESP_LOGV(TAG, "  %s | %s", hex_dump.c_str(), ascii_dump.c_str());
+          hex_dump.clear();
+          ascii_dump.clear();
+        }
+      }
+    }
+    
     // Try to detect protocol format
     std::string ascii_data(raw_data.begin(), raw_data.end());
     
     // Check for ASCII format (starts with 'V')
     if (!ascii_data.empty() && ascii_data[0] == 'V') {
       is_binary_protocol_ = false;
-      ESP_LOGD(TAG, "Detected ASCII protocol: %s", ascii_data.c_str());
+      ESP_LOGI(TAG, "Detected ASCII protocol packet: '%s'", ascii_data.c_str());
       
       // Process ASCII data using existing method
       for (char c : ascii_data) {
         if (this->fill_buffer_(c)) {
+          ESP_LOGI(TAG, "ASCII buffer full, parsing...");
           this->parse_buffer_();
         }
       }
@@ -89,21 +164,52 @@ void LD2415HComponent::loop() {
     } else {
       // Check for binary protocol (9 bytes ending with 0x0D 0x0A)
       is_binary_protocol_ = true;
+      ESP_LOGD(TAG, "Processing binary protocol data (buffer size: %zu)", binary_buffer_.size());
+      
       if (binary_buffer_.size() >= 9) {
         // Look for complete 9-byte packets ending with 0x0D 0x0A
+        bool packet_found = false;
         for (size_t i = 0; i <= binary_buffer_.size() - 9; i++) {
           if (binary_buffer_[i + 7] == 0x0D && binary_buffer_[i + 8] == 0x0A) {
             std::vector<uint8_t> packet(binary_buffer_.begin() + i, binary_buffer_.begin() + i + 9);
+            
+            // Log binary packet found
+            ESP_LOGI(TAG, "Found binary packet at offset %zu:", i);
+            std::string packet_hex;
+            for (uint8_t b : packet) {
+              char hex_str[4];
+              snprintf(hex_str, sizeof(hex_str), "%02X ", b);
+              packet_hex += hex_str;
+            }
+            ESP_LOGI(TAG, "  Binary packet: %s", packet_hex.c_str());
+            
             parse_binary_speed_(packet);
             binary_buffer_.erase(binary_buffer_.begin(), binary_buffer_.begin() + i + 9);
+            packet_found = true;
             break;
           }
         }
         
+        if (!packet_found) {
+          ESP_LOGW(TAG, "No valid binary packet found in buffer (size: %zu)", binary_buffer_.size());
+          // Log current buffer contents for debugging
+          std::string buffer_hex;
+          for (size_t i = 0; i < std::min(binary_buffer_.size(), size_t(20)); i++) {
+            char hex_str[4];
+            snprintf(hex_str, sizeof(hex_str), "%02X ", binary_buffer_[i]);
+            buffer_hex += hex_str;
+          }
+          ESP_LOGW(TAG, "  Buffer contents: %s%s", buffer_hex.c_str(), binary_buffer_.size() > 20 ? "..." : "");
+        }
+        }
+        
         // Keep buffer size manageable
         if (binary_buffer_.size() > 50) {
+          ESP_LOGW(TAG, "Binary buffer growing too large (%zu bytes), trimming...", binary_buffer_.size());
           binary_buffer_.erase(binary_buffer_.begin(), binary_buffer_.begin() + 25);
         }
+      } else {
+        ESP_LOGV(TAG, "Binary buffer too small (%zu bytes), waiting for more data", binary_buffer_.size());
       }
     }
   }
@@ -111,20 +217,79 @@ void LD2415HComponent::loop() {
   // Timeout handling for last max speed
   // Approaching speed
   if (this->approaching_last_max_speed_sensor_ != nullptr && last_max_approaching_speed_ > 0 && now - this->last_approaching_update_time_ > this->timeout_duration_) {
-    this->approaching_last_max_speed_sensor_->publish_state(last_max_approaching_speed_);
+    ESP_LOGI(TAG, "Timeout reached for approaching max speed: publishing %.3f km/h after %u ms", 
+             last_max_approaching_speed_, now - this->last_approaching_update_time_);
+    this->publish_sensor_state_(this->approaching_last_max_speed_sensor_, last_max_approaching_speed_, "Approaching Last Max Speed Sensor (Timeout)");
     this->last_approaching_update_time_ = now;
     this->last_max_approaching_speed_ = 0;
   }
 
   // Departing speed
   if (this->departing_last_max_speed_sensor_ != nullptr && last_max_departing_speed_ > 0 && now - this->last_departing_update_time_ > this->timeout_duration_) {
-    this->departing_last_max_speed_sensor_->publish_state(last_max_departing_speed_);
+    ESP_LOGI(TAG, "Timeout reached for departing max speed: publishing %.3f km/h after %u ms", 
+             last_max_departing_speed_, now - this->last_departing_update_time_);
+    this->publish_sensor_state_(this->departing_last_max_speed_sensor_, last_max_departing_speed_, "Departing Last Max Speed Sensor (Timeout)");
     this->last_departing_update_time_ = now;
     this->last_max_departing_speed_ = 0;
   }
   
   // Clean up inactive vehicles
   this->cleanup_inactive_vehicles_();
+}
+
+bool LD2415HComponent::publish_sensor_state_(sensor::Sensor *sensor, float value, const char *sensor_name) {
+  if (sensor == nullptr) {
+    ESP_LOGW(TAG, "Cannot publish to %s: sensor is NULL", sensor_name);
+    return false;
+  }
+  
+  // Check if value is valid
+  if (std::isnan(value)) {
+    ESP_LOGW(TAG, "Cannot publish to %s: value is NaN", sensor_name);
+    return false;
+  }
+  
+  if (std::isinf(value)) {
+    ESP_LOGW(TAG, "Cannot publish to %s: value is infinite", sensor_name);
+    return false;
+  }
+  
+  // Get current state for comparison
+  float current_state = sensor->get_state();
+  bool has_state = sensor->has_state();
+  
+  ESP_LOGI(TAG, "Publishing to %s:", sensor_name);
+  ESP_LOGI(TAG, "  Sensor pointer: %p", (void*)sensor);
+  ESP_LOGI(TAG, "  Current state: %s%s", has_state ? std::to_string(current_state).c_str() : "no state", has_state ? "" : " (first time)");
+  ESP_LOGI(TAG, "  New value: %.3f", value);
+  ESP_LOGI(TAG, "  Entity ID: %s", sensor->get_object_id().c_str());
+  ESP_LOGI(TAG, "  Entity Name: %s", sensor->get_name().c_str());
+  
+  // Check if sensor is ready/connected
+  if (!sensor->is_internal() && sensor->get_object_id().empty()) {
+    ESP_LOGW(TAG, "Sensor %s has empty object_id - may not be properly configured", sensor_name);
+  }
+  
+  try {
+    // Publish the state
+    sensor->publish_state(value);
+    ESP_LOGI(TAG, "✓ Successfully published %.3f to %s", value, sensor_name);
+    
+    // Verify the state was set
+    if (sensor->has_state() && std::abs(sensor->get_state() - value) < 0.001) {
+      ESP_LOGI(TAG, "✓ Sensor state confirmed: %.3f", sensor->get_state());
+    } else {
+      ESP_LOGW(TAG, "⚠ Sensor state mismatch after publish: expected %.3f, got %.3f", value, sensor->get_state());
+    }
+    
+    return true;
+  } catch (const std::exception& e) {
+    ESP_LOGE(TAG, "✗ Exception publishing to %s: %s", sensor_name, e.what());
+    return false;
+  } catch (...) {
+    ESP_LOGE(TAG, "✗ Unknown exception publishing to %s", sensor_name);
+    return false;
+  }
 }
 
 #ifdef USE_NUMBER
@@ -255,21 +420,29 @@ bool LD2415HComponent::fill_buffer_(char c) {
     case 0xFF:
     case '\r':
       // Ignore these characters
+      ESP_LOGV(TAG, "Ignoring character: 0x%02X", (uint8_t)c);
       break;
 
     case '\n':
       // End of response
-      if (this->response_buffer_index_ == 0)
+      if (this->response_buffer_index_ == 0) {
+        ESP_LOGV(TAG, "Received newline but buffer is empty, ignoring");
         break;
+      }
 
       clear_remaining_buffer_(this->response_buffer_index_);
-      ESP_LOGV(TAG, "Response Received:: %s", this->response_buffer_);
+      ESP_LOGI(TAG, "Complete ASCII response received (%d chars): '%s'", this->response_buffer_index_, this->response_buffer_);
       return true;
 
     default:
       // Append to response
-      this->response_buffer_[this->response_buffer_index_] = c;
-      this->response_buffer_index_++;
+      if (this->response_buffer_index_ < sizeof(this->response_buffer_) - 1) {
+        this->response_buffer_[this->response_buffer_index_] = c;
+        this->response_buffer_index_++;
+        ESP_LOGV(TAG, "Added char '%c' (0x%02X) to buffer at pos %d", c, (uint8_t)c, this->response_buffer_index_ - 1);
+      } else {
+        ESP_LOGW(TAG, "ASCII response buffer full, dropping character '%c' (0x%02X)", c, (uint8_t)c);
+      }
       break;
   }
 
@@ -287,23 +460,28 @@ void LD2415HComponent::clear_remaining_buffer_(uint8_t pos) {
 
 void LD2415HComponent::parse_buffer_() {
   char c = this->response_buffer_[0];
+  
+  ESP_LOGI(TAG, "Parsing ASCII buffer: '%s' (first char: '%c' 0x%02X)", this->response_buffer_, c, (uint8_t)c);
 
   switch (c) {
     case 'N':
       // Firmware Version
+      ESP_LOGI(TAG, "Parsing firmware response");
       this->parse_firmware_();
       break;
     case 'X':
       // Config Response
+      ESP_LOGI(TAG, "Parsing config response");
       this->parse_config_();
       break;
     case 'V':
       // Speed
+      ESP_LOGI(TAG, "Parsing speed response");
       this->parse_speed_();
       break;
 
     default:
-      ESP_LOGE(TAG, "Unknown Response: %s", this->response_buffer_);
+      ESP_LOGW(TAG, "Unknown ASCII response type '%c' (0x%02X): %s", c, (uint8_t)c, this->response_buffer_);
       break;
   }
 }
@@ -370,6 +548,7 @@ void LD2415HComponent::parse_firmware_() {
 
 void LD2415HComponent::parse_speed_() {
   // Example: "V+001.9"
+  ESP_LOGI(TAG, "Parsing ASCII speed from: '%s'", this->response_buffer_);
 
   const char *p = strchr(this->response_buffer_, 'V');
 
@@ -380,6 +559,11 @@ void LD2415HComponent::parse_speed_() {
     ++p;
     this->speed_ = strtod(p, nullptr);
     
+    ESP_LOGI(TAG, "ASCII speed parsed successfully:");
+    ESP_LOGI(TAG, "  Direction char: '%c'", *(p-1));
+    ESP_LOGI(TAG, "  Approaching: %s", this->approaching_ ? "yes" : "no");
+    ESP_LOGI(TAG, "  Velocity: %.3f", this->velocity_);
+    ESP_LOGI(TAG, "  Speed: %.3f km/h", this->speed_);
 
     ESP_LOGV(TAG, "Speed updated: %f KPH", this->speed_);
 
@@ -389,54 +573,79 @@ void LD2415HComponent::parse_speed_() {
       listener->on_approach(this->approaching_);
     }
 */
-    if (this->speed_sensor_ != nullptr)
-      this->speed_sensor_->publish_state(this->speed_);
+    if (this->speed_sensor_ != nullptr) {
+      ESP_LOGI(TAG, "Publishing to speed sensor: %.3f km/h", this->speed_);
+      this->publish_sensor_state_(this->speed_sensor_, this->speed_, "Speed Sensor");
+    } else {
+      ESP_LOGW(TAG, "Speed sensor is null, cannot publish");
+    }
 
     if (this->approaching_) {
       if (this->approaching_speed_sensor_ != nullptr) {
-        this->approaching_speed_sensor_->publish_state(this->speed_);
+        ESP_LOGI(TAG, "Publishing to approaching speed sensor: %.3f km/h", this->speed_);
+        this->publish_sensor_state_(this->approaching_speed_sensor_, this->speed_, "Approaching Speed Sensor");
         this->last_approaching_update_time_ = millis();
       
         // Update last max speed
         if (this->speed_ > this->last_max_approaching_speed_) {
+          ESP_LOGI(TAG, "New max approaching speed: %.3f km/h (was %.3f)", this->speed_, this->last_max_approaching_speed_);
           this->last_max_approaching_speed_ = this->speed_;
         }
+      } else {
+        ESP_LOGW(TAG, "Approaching speed sensor is null, cannot publish");
       }
     } else {
       // Handle departing speed
       if (this->departing_speed_sensor_ != nullptr) {
-        this->departing_speed_sensor_->publish_state(this->speed_);
+        ESP_LOGI(TAG, "Publishing to departing speed sensor: %.3f km/h", this->speed_);
+        this->publish_sensor_state_(this->departing_speed_sensor_, this->speed_, "Departing Speed Sensor");
         this->last_departing_update_time_ = millis();
       
         // Update last max speed
         if (this->speed_ > this->last_max_departing_speed_) {
+          ESP_LOGI(TAG, "New max departing speed: %.3f km/h (was %.3f)", this->speed_, this->last_max_departing_speed_);
           this->last_max_departing_speed_ = this->speed_;
         }
+      } else {
+        ESP_LOGW(TAG, "Departing speed sensor is null, cannot publish");
       }
     }
   
-    if (this->velocity_sensor_ != nullptr)
-      this->velocity_sensor_->publish_state(this->velocity_);
+    if (this->velocity_sensor_ != nullptr) {
+      ESP_LOGI(TAG, "Publishing to velocity sensor: %.3f", this->velocity_);
+      this->publish_sensor_state_(this->velocity_sensor_, this->velocity_, "Velocity Sensor");
+    } else {
+      ESP_LOGW(TAG, "Velocity sensor is null, cannot publish");
+    }
     
     // Process vehicle tracking
+    ESP_LOGI(TAG, "Processing vehicle detection with speed=%.3f, approaching=%s", this->speed_, this->approaching_ ? "yes" : "no");
     this->process_vehicle_detection_(this->speed_, this->approaching_);
 
   } else {
-    ESP_LOGE(TAG, "Firmware value invalid.");
+    ESP_LOGE(TAG, "Failed to find 'V' in ASCII response: '%s'", this->response_buffer_);
   }
 }
 
 void LD2415HComponent::parse_binary_speed_(const std::vector<uint8_t> &data) {
-  if (data.size() != 9) return;
+  ESP_LOGI(TAG, "Parsing binary speed packet (%zu bytes)", data.size());
+  
+  if (data.size() != 9) {
+    ESP_LOGW(TAG, "Invalid binary packet size: %zu (expected 9)", data.size());
+    return;
+  }
   
   // Check if it starts with 'V' (0x56) and ends with 0x0D 0x0A
   if (data[0] != 0x56 || data[7] != 0x0D || data[8] != 0x0A) {
-    ESP_LOGW(TAG, "Invalid binary speed packet format");
+    ESP_LOGW(TAG, "Invalid binary speed packet format:");
+    ESP_LOGW(TAG, "  Expected: 0x56 ... 0x0D 0x0A");
+    ESP_LOGW(TAG, "  Got:      0x%02X ... 0x%02X 0x%02X", data[0], data[7], data[8]);
     return;
   }
   
   // Extract sign (+ = 0x2B, - = 0x2D)
   bool is_approaching = (data[1] == 0x2B);
+  ESP_LOGI(TAG, "Direction byte: 0x%02X (%c) -> %s", data[1], (char)data[1], is_approaching ? "approaching" : "departing");
   
   // Extract speed digits (ASCII numbers)
   if (data[2] < 0x30 || data[2] > 0x39 ||  // hundreds
@@ -444,7 +653,9 @@ void LD2415HComponent::parse_binary_speed_(const std::vector<uint8_t> &data) {
       data[4] < 0x30 || data[4] > 0x39 ||  // units
       data[5] != 0x2E ||                   // decimal point
       data[6] < 0x30 || data[6] > 0x39) {  // decimal
-    ESP_LOGW(TAG, "Invalid binary speed format");
+    ESP_LOGW(TAG, "Invalid binary speed format:");
+    ESP_LOGW(TAG, "  Bytes 2-6: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X", data[2], data[3], data[4], data[5], data[6]);
+    ESP_LOGW(TAG, "  Expected:  0x30-0x39 0x30-0x39 0x30-0x39 0x2E 0x30-0x39");
     return;
   }
   
@@ -454,30 +665,72 @@ void LD2415HComponent::parse_binary_speed_(const std::vector<uint8_t> &data) {
                 (data[4] - 0x30) * 1.0f +    // units
                 (data[6] - 0x30) * 0.1f;     // decimal
   
+  ESP_LOGI(TAG, "Binary speed calculation:");
+  ESP_LOGI(TAG, "  Hundreds: %c (0x%02X) = %d", (char)data[2], data[2], data[2] - 0x30);
+  ESP_LOGI(TAG, "  Tens:     %c (0x%02X) = %d", (char)data[3], data[3], data[3] - 0x30);
+  ESP_LOGI(TAG, "  Units:    %c (0x%02X) = %d", (char)data[4], data[4], data[4] - 0x30);
+  ESP_LOGI(TAG, "  Decimal:  %c (0x%02X) = %d", (char)data[6], data[6], data[6] - 0x30);
+  ESP_LOGI(TAG, "  Result:   %.3f km/h", speed);
+  
   this->approaching_ = is_approaching;
   this->velocity_ = is_approaching ? speed : -speed;
   this->speed_ = speed;
   
-  ESP_LOGD(TAG, "Binary speed parsed: %.1f km/h (approaching: %s)", speed, is_approaching ? "yes" : "no");
+  ESP_LOGI(TAG, "Binary speed parsed successfully:");
+  ESP_LOGI(TAG, "  Speed: %.3f km/h", speed);
+  ESP_LOGI(TAG, "  Approaching: %s", is_approaching ? "yes" : "no");
+  ESP_LOGI(TAG, "  Velocity: %.3f", this->velocity_);
   
   // Update sensors with the parsed speed (same logic as ASCII parsing)
-  if (this->speed_sensor_ != nullptr)
-    this->speed_sensor_->publish_state(this->speed_);
+  if (this->speed_sensor_ != nullptr) {
+    ESP_LOGI(TAG, "Publishing to speed sensor: %.3f km/h", this->speed_);
+    this->publish_sensor_state_(this->speed_sensor_, this->speed_, "Speed Sensor (Binary)");
+  } else {
+    ESP_LOGW(TAG, "Speed sensor is null, cannot publish");
+  }
 
   if (this->approaching_) {
     if (this->approaching_speed_sensor_ != nullptr) {
-      this->approaching_speed_sensor_->publish_state(this->speed_);
+      ESP_LOGI(TAG, "Publishing to approaching speed sensor: %.3f km/h", this->speed_);
+      this->publish_sensor_state_(this->approaching_speed_sensor_, this->speed_, "Approaching Speed Sensor (Binary)");
       this->last_approaching_update_time_ = millis();
     
       // Update last max speed
       if (this->speed_ > this->last_max_approaching_speed_) {
+        ESP_LOGI(TAG, "New max approaching speed: %.3f km/h (was %.3f)", this->speed_, this->last_max_approaching_speed_);
         this->last_max_approaching_speed_ = this->speed_;
       }
+    } else {
+      ESP_LOGW(TAG, "Approaching speed sensor is null, cannot publish");
     }
   } else {
     // Handle departing speed
     if (this->departing_speed_sensor_ != nullptr) {
-      this->departing_speed_sensor_->publish_state(this->speed_);
+      ESP_LOGI(TAG, "Publishing to departing speed sensor: %.3f km/h", this->speed_);
+      this->publish_sensor_state_(this->departing_speed_sensor_, this->speed_, "Departing Speed Sensor (Binary)");
+      this->last_departing_update_time_ = millis();
+    
+      // Update last max speed
+      if (this->speed_ > this->last_max_departing_speed_) {
+        ESP_LOGI(TAG, "New max departing speed: %.3f km/h (was %.3f)", this->speed_, this->last_max_departing_speed_);
+        this->last_max_departing_speed_ = this->speed_;
+      }
+    } else {
+      ESP_LOGW(TAG, "Departing speed sensor is null, cannot publish");
+    }
+  }
+
+  if (this->velocity_sensor_ != nullptr) {
+    ESP_LOGI(TAG, "Publishing to velocity sensor: %.3f", this->velocity_);
+    this->publish_sensor_state_(this->velocity_sensor_, this->velocity_, "Velocity Sensor (Binary)");
+  } else {
+    ESP_LOGW(TAG, "Velocity sensor is null, cannot publish");
+  }
+  
+  // Process vehicle tracking
+  ESP_LOGI(TAG, "Processing vehicle detection with speed=%.3f, approaching=%s", this->speed_, this->approaching_ ? "yes" : "no");
+  this->process_vehicle_detection_(this->speed_, this->approaching_);
+}
       this->last_departing_update_time_ = millis();
     
       // Update last max speed
@@ -628,14 +881,21 @@ const char *LD2415HComponent::i_to_s_(const std::map<std::string, uint8_t> &map,
 
 // Vehicle tracking implementation
 void LD2415HComponent::process_vehicle_detection_(double speed, bool is_approaching) {
+  ESP_LOGI(TAG, "Processing vehicle detection: speed=%.3f km/h, approaching=%s, threshold=%.1f", 
+           speed, is_approaching ? "yes" : "no", MIN_DETECTION_SPEED);
+  
   // Only process if speed is above minimum threshold
   if (speed < MIN_DETECTION_SPEED) {
+    ESP_LOGD(TAG, "Speed %.3f below minimum threshold %.1f, ignoring", speed, MIN_DETECTION_SPEED);
     return;
   }
   
   Vehicle* vehicle = this->find_or_create_vehicle_(speed, is_approaching);
   if (vehicle != nullptr) {
+    ESP_LOGI(TAG, "Found/created vehicle ID %u, updating with speed %.3f", vehicle->id, speed);
     this->update_vehicle_(vehicle, speed, millis());
+  } else {
+    ESP_LOGW(TAG, "Failed to find or create vehicle for speed %.3f", speed);
   }
 }
 
@@ -747,21 +1007,29 @@ void LD2415HComponent::publish_vehicle_data_(const Vehicle& vehicle, bool is_fin
     if (this->current_approaching_vehicle_speed_sensor_ != nullptr) {
       if (is_final) {
         // Publish final max speed
-        this->current_approaching_vehicle_speed_sensor_->publish_state(vehicle.max_speed);
+        ESP_LOGI(TAG, "Publishing final approaching vehicle data: ID=%u, max_speed=%.3f", vehicle.id, vehicle.max_speed);
+        this->publish_sensor_state_(this->current_approaching_vehicle_speed_sensor_, vehicle.max_speed, "Current Approaching Vehicle Speed (Final)");
       } else {
         // Publish current speed
-        this->current_approaching_vehicle_speed_sensor_->publish_state(vehicle.last_speed);
+        ESP_LOGI(TAG, "Publishing current approaching vehicle data: ID=%u, current_speed=%.3f", vehicle.id, vehicle.last_speed);
+        this->publish_sensor_state_(this->current_approaching_vehicle_speed_sensor_, vehicle.last_speed, "Current Approaching Vehicle Speed");
       }
+    } else {
+      ESP_LOGW(TAG, "Current approaching vehicle speed sensor is null, cannot publish vehicle data");
     }
   } else {
     if (this->current_departing_vehicle_speed_sensor_ != nullptr) {
       if (is_final) {
         // Publish final max speed
-        this->current_departing_vehicle_speed_sensor_->publish_state(vehicle.max_speed);
+        ESP_LOGI(TAG, "Publishing final departing vehicle data: ID=%u, max_speed=%.3f", vehicle.id, vehicle.max_speed);
+        this->publish_sensor_state_(this->current_departing_vehicle_speed_sensor_, vehicle.max_speed, "Current Departing Vehicle Speed (Final)");
       } else {
         // Publish current speed
-        this->current_departing_vehicle_speed_sensor_->publish_state(vehicle.last_speed);
+        ESP_LOGI(TAG, "Publishing current departing vehicle data: ID=%u, current_speed=%.3f", vehicle.id, vehicle.last_speed);
+        this->publish_sensor_state_(this->current_departing_vehicle_speed_sensor_, vehicle.last_speed, "Current Departing Vehicle Speed");
       }
+    } else {
+      ESP_LOGW(TAG, "Current departing vehicle speed sensor is null, cannot publish vehicle data");
     }
   }
 }
