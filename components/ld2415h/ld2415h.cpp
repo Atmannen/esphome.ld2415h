@@ -125,10 +125,10 @@ void LD2415HComponent::loop() {
   
   // Clean up inactive vehicles
   this->cleanup_inactive_vehicles_();
-    this->last_departing_update_time_ = now;
-    this->last_max_departing_speed_ = 0;
-  }
+}
 
+#ifdef USE_NUMBER
+void LD2415HComponent::update() {
   if (this->update_speed_angle_sense_) {
     ESP_LOGD(TAG, "LD2415H_CMD_SET_SPEED_ANGLE_SENSE: ");
     this->cmd_speed_angle_sense_[3] = this->min_speed_threshold_;
@@ -178,7 +178,6 @@ void LD2415HComponent::loop() {
   }
 }
 
-#ifdef USE_NUMBER
 void LD2415HComponent::set_min_speed_threshold(uint8_t speed) {
   this->min_speed_threshold_ = speed;
   this->update_speed_angle_sense_ = true;
@@ -579,7 +578,7 @@ NegotiationMode LD2415HComponent::i_to_negotiation_mode_(uint8_t value) {
     case NegotiationMode::STANDARD_PROTOCOL:
       return NegotiationMode::STANDARD_PROTOCOL;
     default:
-      ESP_LOGE(TAG, "Invalid UnitOfMeasure:%u", value);
+      ESP_LOGE(TAG, "Invalid NegotiationMode:%u", value);
       return NegotiationMode::CUSTOM_AGREEMENT;
   }
 }
