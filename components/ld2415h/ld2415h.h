@@ -11,6 +11,7 @@
 #endif
 #include <map>
 #include <vector>
+#include <string>
 
 namespace esphome {
 namespace ld2415h {
@@ -174,9 +175,11 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   bool is_binary_protocol_{false};
   std::vector<uint8_t> binary_buffer_;
   
-  // Heartbeat for debugging
-  uint32_t last_heartbeat_time_{0};
-  uint32_t last_data_received_time_{0};
+  // Kalman filter state for speed smoothing
+  double filtered_speed_ = 0;
+  double speed_variance_ = 1.0;  // Process noise
+  double measurement_variance_ = 4.0;  // Measurement noise
+  bool filter_initialized_ = false;
   
   // Vehicle tracking
   std::vector<Vehicle> approaching_vehicles_;
@@ -202,7 +205,13 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   bool parse_hex_speed_packet_(const std::vector<uint8_t> &data);
   void parse_config_param_(char *key, char *value);
   
-  // Sensor publishing with detailed logging
+  // Single measurement processing
+  void process_single_measurement_(double speed, bool approaching);
+  
+  // Speed filtering
+  double apply_kalman_filter_(double measured_speed);
+  
+  // Sensor publishing
   bool publish_sensor_state_(sensor::Sensor *sensor, float value, const char *sensor_name);
   
   // Vehicle tracking methods
