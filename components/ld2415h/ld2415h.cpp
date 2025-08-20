@@ -38,10 +38,8 @@ void LD2415HComponent::setup() {
   ESP_LOGI(TAG, "  Current approaching vehicle speed sensor: %s", this->current_approaching_vehicle_speed_sensor_ ? "configured" : "NOT configured");
   ESP_LOGI(TAG, "  Current departing vehicle speed sensor: %s", this->current_departing_vehicle_speed_sensor_ ? "configured" : "NOT configured");
   
-  ESP_LOGI(TAG, "LD2415H Component initialized and ready for data");
-  ESP_LOGI(TAG, "Waiting for sensor packets...");
-  ESP_LOGI(TAG, "Protocol mode: %s", this->is_binary_protocol_ ? "BINARY" : "ASCII");
-  ESP_LOGI(TAG, "Using hex-to-ASCII parser to handle binary protocol data");
+  ESP_LOGI(TAG, "LD2415H Component initialized");
+  ESP_LOGI(TAG, "Ready for sensor data");
   
   // Log sensor entity details for debugging Home Assistant connectivity
   if (this->speed_sensor_) {
@@ -344,7 +342,7 @@ bool LD2415HComponent::fill_buffer_(char c) {
       }
 
       clear_remaining_buffer_(this->response_buffer_index_);
-      ESP_LOGI(TAG, "Complete ASCII response received (%d chars): '%s'", this->response_buffer_index_, this->response_buffer_);
+      ESP_LOGD(TAG, "ASCII response received (%d chars): '%s'", this->response_buffer_index_, this->response_buffer_);
       return true;
 
     default:
@@ -374,8 +372,7 @@ void LD2415HComponent::clear_remaining_buffer_(uint8_t pos) {
 void LD2415HComponent::parse_buffer_() {
   char c = this->response_buffer_[0];
   
-  ESP_LOGI(TAG, "Parsing ASCII buffer: '%s' (first char: '%c' 0x%02X)", this->response_buffer_, c, (uint8_t)c);
-  ESP_LOGI(TAG, "Protocol flag is set to: %s (but currently always parsing as ASCII)", this->is_binary_protocol_ ? "BINARY" : "ASCII");
+  ESP_LOGV(TAG, "Parsing buffer: first char '%c' (0x%02X)", c, (uint8_t)c);
 
   switch (c) {
     case 'N':
@@ -390,7 +387,7 @@ void LD2415HComponent::parse_buffer_() {
       break;
     case 'V':
       // Speed
-      ESP_LOGI(TAG, "Parsing speed response");
+      ESP_LOGV(TAG, "Parsing speed response");
       this->parse_speed_();
       break;
 
@@ -462,50 +459,70 @@ void LD2415HComponent::parse_firmware_() {
 
 void LD2415HComponent::parse_speed_() {
   // Parse multiple concatenated measurements like "V+004.6V+040.3", "V+0V+038.1", or "V+000V+001.7"
+  // Work directly with char buffer to minimize memory allocation
   
-  std::string buffer_str = std::string(this->response_buffer_);
-  size_t pos = 0;
+  char *buffer = this->response_buffer_;
+  size_t len = strlen(buffer);
   
   // Find all 'V' characters and process each measurement
-  while ((pos = buffer_str.find('V', pos)) != std::string::npos) {
+  for (size_t pos = 0; pos < len; pos++) {
+    if (buffer[pos] != 'V') continue;
+    
     // Find the next 'V' to determine the length of this measurement
-    size_t next_v = buffer_str.find('V', pos + 1);
-    size_t measurement_length = (next_v != std::string::npos) ? (next_v - pos) : (buffer_str.length() - pos);
+    size_t next_v_pos = len; // Default to end of buffer
+    for (size_t i = pos + 1; i < len; i++) {
+      if (buffer[i] == 'V') {
+        next_v_pos = i;
+        break;
+      }
+    }
+    
+    size_t measurement_length = next_v_pos - pos;
     
     // Need at least 3 characters for a minimal measurement (V±X)
     if (measurement_length < 3) {
-      pos++;
       continue;
     }
     
-    // Extract this measurement
-    std::string measurement = buffer_str.substr(pos, measurement_length);
+    // Extract this measurement into a temporary buffer
+    char measurement[32]; // Local buffer to avoid heap allocation
+    if (measurement_length >= sizeof(measurement)) {
+      measurement_length = sizeof(measurement) - 1;
+    }
+    strncpy(measurement, &buffer[pos], measurement_length);
+    measurement[measurement_length] = '\0';
     
     // Validate and parse the measurement
-    if (measurement.length() >= 3 && 
+    if (measurement_length >= 3 && 
         (measurement[1] == '+' || measurement[1] == '-')) {
       
-      // Extract the numeric part after V±
-      std::string speed_str = measurement.substr(2);
+      // Extract the numeric part after V± directly
+      char speed_str[16];
+      strncpy(speed_str, &measurement[2], sizeof(speed_str) - 1);
+      speed_str[sizeof(speed_str) - 1] = '\0';
       
       // Handle cases where decimal point might be missing (like "V+000" instead of "V+000.0")
-      if (speed_str.find('.') == std::string::npos && speed_str.length() >= 3) {
+      size_t speed_len = strlen(speed_str);
+      if (strchr(speed_str, '.') == nullptr && speed_len >= 3) {
         // Insert decimal point before last digit if it looks like integer format
-        speed_str.insert(speed_str.length() - 1, ".");
+        if (speed_len < sizeof(speed_str) - 1) {
+          memmove(&speed_str[speed_len - 1 + 1], &speed_str[speed_len - 1], 2);
+          speed_str[speed_len - 1] = '.';
+        }
       }
       
-      // Simple validation: check if string contains only digits, decimal point, and optional sign
+      // Simple validation: check if string contains only digits and decimal point
       bool valid = true;
-      for (char c : speed_str) {
-        if (!std::isdigit(c) && c != '.') {
+      for (size_t i = 0; speed_str[i] != '\0'; i++) {
+        if (!std::isdigit(speed_str[i]) && speed_str[i] != '.') {
           valid = false;
           break;
         }
       }
       
-      if (valid && !speed_str.empty()) {
+      if (valid && speed_str[0] != '\0') {
         bool approaching = (measurement[1] == '+');
-        double speed = std::atof(speed_str.c_str());
+        double speed = std::atof(speed_str);
         
         // Only process valid speed values (ignore very small or truncated values)
         if (speed >= 0.1) { // Minimum meaningful speed
@@ -519,94 +536,11 @@ void LD2415HComponent::parse_speed_() {
           this->process_single_measurement_(speed, approaching);
         }
       } else {
-        // Skip invalid measurements
-        ESP_LOGV(TAG, "Failed to parse measurement '%s': invalid format", measurement.c_str());
+        // Skip invalid measurements (use LOGV to reduce spam)
+        ESP_LOGV(TAG, "Failed to parse measurement: invalid format");
       }
     }
-    
-    // Move to next potential 'V'
-    pos++;
   }
-}
-
-void LD2415HComponent::parse_binary_speed_(const std::vector<uint8_t> &data) {
-  ESP_LOGI(TAG, "Parsing binary speed packet (%zu bytes)", data.size());
-  
-  if (data.size() != 9) {
-    ESP_LOGW(TAG, "Invalid binary packet size: %zu (expected 9)", data.size());
-    return;
-  }
-  
-  // Check if it starts with 'V' (0x56) and ends with 0x0D 0x0A
-  if (data[0] != 0x56 || data[7] != 0x0D || data[8] != 0x0A) {
-    ESP_LOGW(TAG, "Invalid binary speed packet format:");
-    ESP_LOGW(TAG, "  Expected: 0x56 ... 0x0D 0x0A");
-    ESP_LOGW(TAG, "  Got:      0x%02X ... 0x%02X 0x%02X", data[0], data[7], data[8]);
-    return;
-  }
-  
-  // Extract sign (+ = 0x2B, - = 0x2D)
-  bool is_approaching = (data[1] == 0x2B);
-  ESP_LOGI(TAG, "Direction byte: 0x%02X (%c) -> %s", data[1], (char)data[1], is_approaching ? "approaching" : "departing");
-  
-  // Extract speed digits (ASCII numbers)
-  if (data[2] < 0x30 || data[2] > 0x39 ||  // hundreds
-      data[3] < 0x30 || data[3] > 0x39 ||  // tens
-      data[4] < 0x30 || data[4] > 0x39 ||  // units
-      data[5] != 0x2E ||                   // decimal point
-      data[6] < 0x30 || data[6] > 0x39) {  // decimal
-    ESP_LOGW(TAG, "Invalid binary speed format:");
-    ESP_LOGW(TAG, "  Bytes 2-6: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X", data[2], data[3], data[4], data[5], data[6]);
-    ESP_LOGW(TAG, "  Expected:  0x30-0x39 0x30-0x39 0x30-0x39 0x2E 0x30-0x39");
-    return;
-  }
-  
-  // Convert to speed value
-  float speed = (data[2] - 0x30) * 100.0f +  // hundreds
-                (data[3] - 0x30) * 10.0f +   // tens
-                (data[4] - 0x30) * 1.0f +    // units
-                (data[6] - 0x30) * 0.1f;     // decimal
-  
-  this->approaching_ = is_approaching;
-  this->velocity_ = is_approaching ? speed : -speed;
-  this->speed_ = std::abs(speed);
-  
-  // Apply Kalman filtering for noise reduction
-  this->speed_ = this->apply_kalman_filter_(this->speed_);
-  
-  ESP_LOGI(TAG, "Binary speed parsed successfully:");
-  ESP_LOGI(TAG, "  Speed: %.3f km/h", speed);
-  ESP_LOGI(TAG, "  Direction: %s", is_approaching ? "approaching" : "departing");
-  ESP_LOGI(TAG, "  Velocity: %.3f km/h", this->velocity_);
-
-  // Publish sensor data
-  if (this->speed_sensor_ != nullptr) {
-    ESP_LOGI(TAG, "Publishing to speed sensor: %.3f km/h", this->speed_);
-    this->publish_sensor_state_(this->speed_sensor_, this->speed_, "Speed Sensor (Binary)");
-  }
-
-  if (this->approaching_) {
-    if (this->approaching_speed_sensor_ != nullptr) {
-      ESP_LOGI(TAG, "Publishing to approaching speed sensor: %.3f km/h", this->speed_);
-      this->publish_sensor_state_(this->approaching_speed_sensor_, this->speed_, "Approaching Speed Sensor (Binary)");
-      this->last_approaching_update_time_ = millis();
-    }
-  } else {
-    if (this->departing_speed_sensor_ != nullptr) {
-      ESP_LOGI(TAG, "Publishing to departing speed sensor: %.3f km/h", this->speed_);
-      this->publish_sensor_state_(this->departing_speed_sensor_, this->speed_, "Departing Speed Sensor (Binary)");
-      this->last_departing_update_time_ = millis();
-    }
-  }
-
-  if (this->velocity_sensor_ != nullptr) {
-    ESP_LOGI(TAG, "Publishing to velocity sensor: %.3f", this->velocity_);
-    this->publish_sensor_state_(this->velocity_sensor_, this->velocity_, "Velocity Sensor (Binary)");
-  }
-
-  // Process vehicle tracking
-  ESP_LOGI(TAG, "Processing vehicle detection with speed=%.3f, approaching=%s", this->speed_, this->approaching_ ? "yes" : "no");
-  this->process_vehicle_detection_(this->speed_, this->approaching_);
 }
 
 bool LD2415HComponent::parse_hex_speed_packet_(const std::vector<uint8_t> &data) {

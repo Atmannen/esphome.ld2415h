@@ -104,7 +104,6 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   void set_relay_trigger_duration(uint8_t duration);
   void set_relay_trigger_speed(uint8_t speed);
   void set_timeout_duration(uint32_t duration);
-  void set_binary_protocol(bool binary_mode) { this->is_binary_protocol_ = binary_mode; }
 
 #ifdef USE_NUMBER
   number::Number *min_speed_threshold_number_{nullptr};
@@ -171,10 +170,6 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   char response_buffer_[64];
   uint8_t response_buffer_index_ = 0;
   
-  // Binary protocol support
-  bool is_binary_protocol_{false};
-  std::vector<uint8_t> binary_buffer_;
-  
   // Kalman filter state for speed smoothing
   double filtered_speed_ = 0;
   double speed_variance_ = 1.0;  // Process noise
@@ -201,7 +196,6 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   void parse_config_();
   void parse_firmware_();
   void parse_speed_();
-  void parse_binary_speed_(const std::vector<uint8_t> &data);
   bool parse_hex_speed_packet_(const std::vector<uint8_t> &data);
   void parse_config_param_(char *key, char *value);
   
