@@ -23,6 +23,10 @@ static const double MIN_STABLE_SPEED = 3.0;               // Minimum speed to co
 static const uint32_t MIN_DETECTION_DURATION = 800;       // Minimum 800ms for valid vehicle
 static const uint32_t OVERTAKE_PROTECTION_TIME = 5000;    // 5 seconds protection against false counting during overtakes
 
+// Rate limiting constants to prevent memory overflow
+static const uint32_t MIN_SENSOR_UPDATE_INTERVAL = 250;   // Minimum 250ms between sensor updates
+static const uint32_t MEMORY_PROTECTION_INTERVAL = 500;   // Extra throttling during memory pressure
+
 enum NegotiationMode : uint8_t { CUSTOM_AGREEMENT = 0x01, STANDARD_PROTOCOL = 0x02 };
 
 enum SampleRateStructure : uint8_t { SAMPLE_RATE_22FPS = 0x00, SAMPLE_RATE_11FPS = 0x01, SAMPLE_RATE_6FPS = 0x02 };
@@ -145,7 +149,7 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   uint8_t compensation_angle_ = 0;
   uint8_t sensitivity_ = 0;
   TrackingMode tracking_mode_ = TrackingMode::APPROACHING_AND_RETREATING;
-  uint8_t sample_rate_ = 0;
+  uint8_t sample_rate_ = 1;  // Default to 11 fps instead of 22 fps for better performance
   UnitOfMeasure unit_of_measure_ = UnitOfMeasure::KPH;
   uint8_t vibration_correction_ = 0;
   uint8_t relay_trigger_duration_ = 0;
@@ -202,6 +206,10 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   uint32_t last_departing_time_{0};
   bool potential_overtake_in_progress_{false};
 
+  // Rate limiting to prevent memory overflow
+  uint32_t last_sensor_update_time_{0};
+  bool memory_protection_mode_{false};
+
   // Processing
   void issue_command_(const uint8_t cmd[], uint8_t size);
   bool fill_buffer_(char c);
@@ -236,6 +244,10 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   bool is_same_vehicle_conservative_(const Vehicle& vehicle, double new_speed, uint32_t time_gap);
   bool is_potential_overtake_(bool is_approaching);
   double calculate_vehicle_grouping_probability_(const Vehicle& vehicle, double new_speed, uint32_t time_gap);
+
+  // Memory protection
+  void enable_memory_protection_();
+  void check_memory_status_();
 
   // Helpers
   TrackingMode i_to_tracking_mode_(uint8_t value);

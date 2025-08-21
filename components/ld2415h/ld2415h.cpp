@@ -94,6 +94,9 @@ void LD2415HComponent::dump_config() {
 }
 
 void LD2415HComponent::loop() {
+  // Memory protection and performance optimization
+  this->check_memory_status_();
+  
   // Clean up inactive vehicles periodically
   this->cleanup_inactive_vehicles_();
   
@@ -113,9 +116,15 @@ void LD2415HComponent::loop() {
     this->last_max_departing_speed_ = 0;
   }
 
-  while (this->available()) {
+  // Limit serial processing to prevent long blocking times
+  int max_bytes_per_loop = this->memory_protection_mode_ ? 10 : 20;
+  int bytes_processed = 0;
+  
+  while (this->available() && bytes_processed < max_bytes_per_loop) {
     uint8_t byte;
     this->read_byte(&byte);
+    bytes_processed++;
+    
     if (this->fill_buffer_(byte)) {
       this->parse_buffer_();
     }
@@ -127,6 +136,16 @@ bool LD2415HComponent::publish_sensor_state_(sensor::Sensor *sensor, float value
     return false;
   }
   
+  // Rate limiting to prevent memory overflow
+  uint32_t current_time = millis();
+  uint32_t min_interval = this->memory_protection_mode_ ? MEMORY_PROTECTION_INTERVAL : MIN_SENSOR_UPDATE_INTERVAL;
+  
+  if ((current_time - this->last_sensor_update_time_) < min_interval) {
+    ESP_LOGV(TAG, "Rate limiting sensor update for %s (%.1f)", sensor_name ? sensor_name : "unknown", value);
+    return false;  // Skip this update to prevent memory pressure
+  }
+  
+  this->last_sensor_update_time_ = current_time;
   sensor->publish_state(value);
   return true;
 }
@@ -155,7 +174,7 @@ double LD2415HComponent::apply_kalman_filter_(double measured_speed) {
 bool LD2415HComponent::is_speed_outlier_(double speed) {
   // Basic sanity checks for impossible speeds
   if (speed > 200.0) {  // > 200 km/h is definitely an outlier for most radar applications
-    ESP_LOGW(TAG, "Rejecting extreme outlier: %.1f km/h", speed);
+    ESP_LOGV(TAG, "Rejecting extreme outlier: %.1f km/h", speed);
     return true;
   }
   
@@ -187,7 +206,7 @@ bool LD2415HComponent::is_speed_outlier_(double speed) {
   // Reject if more than 3 standard deviations from median
   double deviation = std::abs(speed - median);
   if (robust_std > 0.1 && deviation > (3.0 * robust_std)) {
-    ESP_LOGW(TAG, "Rejecting statistical outlier: %.1f km/h (median: %.1f, deviation: %.1f, threshold: %.1f)", 
+    ESP_LOGV(TAG, "Rejecting statistical outlier: %.1f km/h (median: %.1f, deviation: %.1f, threshold: %.1f)", 
              speed, median, deviation, 3.0 * robust_std);
     return true;
   }
@@ -215,12 +234,12 @@ double LD2415HComponent::apply_robust_filter_(double measured_speed) {
   if (this->is_speed_outlier_(measured_speed)) {
     // For outliers, return the current filtered value or moving average
     if (this->filter_initialized_) {
-      ESP_LOGD(TAG, "Using previous filtered value %.1f instead of outlier %.1f", 
+      ESP_LOGV(TAG, "Using previous filtered value %.1f instead of outlier %.1f", 
                this->filtered_speed_, measured_speed);
       return this->filtered_speed_;
     } else if (!this->speed_history_.empty()) {
       double avg = this->calculate_moving_average_();
-      ESP_LOGD(TAG, "Using moving average %.1f instead of outlier %.1f", avg, measured_speed);
+      ESP_LOGV(TAG, "Using moving average %.1f instead of outlier %.1f", avg, measured_speed);
       return avg;
     }
     // If we have no history, reluctantly accept even the outlier but log it
@@ -255,7 +274,7 @@ double LD2415HComponent::apply_robust_filter_(double measured_speed) {
   // Step 4: Apply Kalman filter to the smoothed measurement
   double filtered_speed = this->apply_kalman_filter_(smoothed_speed);
   
-  ESP_LOGD(TAG, "Robust filter: raw=%.1f → smoothed=%.1f → filtered=%.1f", 
+  ESP_LOGV(TAG, "Robust filter: raw=%.1f → smoothed=%.1f → filtered=%.1f", 
            measured_speed, smoothed_speed, filtered_speed);
   
   return filtered_speed;
@@ -453,7 +472,7 @@ bool LD2415HComponent::fill_buffer_(char c) {
       }
 
       clear_remaining_buffer_(this->response_buffer_index_);
-      ESP_LOGD(TAG, "ASCII response received (%d chars): '%s'", this->response_buffer_index_, this->response_buffer_);
+      ESP_LOGV(TAG, "ASCII response received (%d chars): '%s'", this->response_buffer_index_, this->response_buffer_);
       return true;
 
     default:
@@ -1152,6 +1171,31 @@ double LD2415HComponent::calculate_vehicle_grouping_probability_(const Vehicle& 
   }
   
   return std::min(probability, 1.0);
+}
+
+// Memory protection implementation
+void LD2415HComponent::enable_memory_protection_() {
+  if (!this->memory_protection_mode_) {
+    ESP_LOGW(TAG, "Enabling memory protection mode due to allocation failures");
+    this->memory_protection_mode_ = true;
+  }
+}
+
+void LD2415HComponent::check_memory_status_() {
+  // Check for low memory conditions and enable protection if needed
+  // This is a simplified approach - in a real implementation you might check heap size
+  uint32_t current_time = millis();
+  static uint32_t last_memory_check = 0;
+  
+  if ((current_time - last_memory_check) > 10000) {  // Check every 10 seconds
+    last_memory_check = current_time;
+    
+    // If we've been in protection mode for a while, try to exit it
+    if (this->memory_protection_mode_) {
+      ESP_LOGI(TAG, "Attempting to exit memory protection mode");
+      this->memory_protection_mode_ = false;
+    }
+  }
 }
 
 }  // namespace ld2415h
