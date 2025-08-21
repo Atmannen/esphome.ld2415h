@@ -16,6 +16,13 @@
 namespace esphome {
 namespace ld2415h {
 
+// Conservative vehicle grouping constants
+static const double CONSERVATIVE_SPEED_THRESHOLD = 8.0;    // 8 km/h max speed change for same vehicle
+static const uint32_t CONSERVATIVE_TIME_GAP = 2000;       // 2 seconds max gap between detections
+static const double MIN_STABLE_SPEED = 3.0;               // Minimum speed to consider stable detection
+static const uint32_t MIN_DETECTION_DURATION = 800;       // Minimum 800ms for valid vehicle
+static const uint32_t OVERTAKE_PROTECTION_TIME = 5000;    // 5 seconds protection against false counting during overtakes
+
 enum NegotiationMode : uint8_t { CUSTOM_AGREEMENT = 0x01, STANDARD_PROTOCOL = 0x02 };
 
 enum SampleRateStructure : uint8_t { SAMPLE_RATE_22FPS = 0x00, SAMPLE_RATE_11FPS = 0x01, SAMPLE_RATE_6FPS = 0x02 };
@@ -170,7 +177,9 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   char response_buffer_[64];
   uint8_t response_buffer_index_ = 0;
   
-  // Kalman filter state for speed smoothing
+  // Robust filtering system
+  std::vector<double> speed_history_;
+  static const size_t MAX_HISTORY_SIZE = 10;
   double filtered_speed_ = 0;
   double speed_variance_ = 1.0;  // Process noise
   double measurement_variance_ = 4.0;  // Measurement noise
@@ -183,10 +192,15 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   uint32_t approaching_vehicle_count_{0};
   uint32_t departing_vehicle_count_{0};
   
-  // Vehicle detection thresholds
+  // Conservative vehicle detection thresholds
   static constexpr double SPEED_JUMP_THRESHOLD = 20.0;  // km/h difference to detect new vehicle
   static constexpr uint32_t VEHICLE_TIMEOUT = 3000;     // ms without detection before vehicle is considered gone
   static constexpr double MIN_DETECTION_SPEED = 5.0;    // km/h minimum speed to consider as vehicle
+  
+  // Overtake protection state
+  uint32_t last_approaching_time_{0};
+  uint32_t last_departing_time_{0};
+  bool potential_overtake_in_progress_{false};
 
   // Processing
   void issue_command_(const uint8_t cmd[], uint8_t size);
@@ -202,7 +216,10 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   // Single measurement processing
   void process_single_measurement_(double speed, bool approaching);
   
-  // Speed filtering
+  // Robust speed filtering
+  bool is_speed_outlier_(double speed);
+  double calculate_moving_average_();
+  double apply_robust_filter_(double measured_speed);
   double apply_kalman_filter_(double measured_speed);
   
   // Sensor publishing
@@ -214,6 +231,11 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   void update_vehicle_(Vehicle* vehicle, double speed, uint32_t current_time);
   void cleanup_inactive_vehicles_();
   void publish_vehicle_data_(const Vehicle& vehicle, bool is_final);
+  
+  // Conservative grouping methods
+  bool is_same_vehicle_conservative_(const Vehicle& vehicle, double new_speed, uint32_t time_gap);
+  bool is_potential_overtake_(bool is_approaching);
+  double calculate_vehicle_grouping_probability_(const Vehicle& vehicle, double new_speed, uint32_t time_gap);
 
   // Helpers
   TrackingMode i_to_tracking_mode_(uint8_t value);

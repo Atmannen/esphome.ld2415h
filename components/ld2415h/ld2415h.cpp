@@ -1,6 +1,7 @@
 #include "ld2415h.h"
 #include "esphome/core/log.h"
 #include <cmath>
+#include <algorithm>
 
 namespace esphome {
 namespace ld2415h {
@@ -148,6 +149,116 @@ double LD2415HComponent::apply_kalman_filter_(double measured_speed) {
   this->speed_variance_ = (1 - kalman_gain) * predicted_variance;
   
   return this->filtered_speed_;
+}
+
+// Check if a speed measurement is an outlier
+bool LD2415HComponent::is_speed_outlier_(double speed) {
+  // Basic sanity checks for impossible speeds
+  if (speed > 200.0) {  // > 200 km/h is definitely an outlier for most radar applications
+    ESP_LOGW(TAG, "Rejecting extreme outlier: %.1f km/h", speed);
+    return true;
+  }
+  
+  if (speed < 0.1) {  // Very low speeds are often noise
+    return true;
+  }
+  
+  // If we don't have enough history, accept the measurement
+  if (this->speed_history_.size() < 3) {
+    return false;
+  }
+  
+  // Calculate median of recent measurements for robust comparison
+  std::vector<double> sorted_history = this->speed_history_;
+  std::sort(sorted_history.begin(), sorted_history.end());
+  double median = sorted_history[sorted_history.size() / 2];
+  
+  // Calculate median absolute deviation (MAD) for robust standard deviation
+  std::vector<double> deviations;
+  for (double val : sorted_history) {
+    deviations.push_back(std::abs(val - median));
+  }
+  std::sort(deviations.begin(), deviations.end());
+  double mad = deviations[deviations.size() / 2];
+  
+  // Convert MAD to approximate standard deviation
+  double robust_std = mad * 1.4826;  // MAD to standard deviation conversion factor
+  
+  // Reject if more than 3 standard deviations from median
+  double deviation = std::abs(speed - median);
+  if (robust_std > 0.1 && deviation > (3.0 * robust_std)) {
+    ESP_LOGW(TAG, "Rejecting statistical outlier: %.1f km/h (median: %.1f, deviation: %.1f, threshold: %.1f)", 
+             speed, median, deviation, 3.0 * robust_std);
+    return true;
+  }
+  
+  return false;
+}
+
+// Calculate moving average of recent speed measurements
+double LD2415HComponent::calculate_moving_average_() {
+  if (this->speed_history_.empty()) {
+    return 0.0;
+  }
+  
+  double sum = 0.0;
+  for (double speed : this->speed_history_) {
+    sum += speed;
+  }
+  
+  return sum / this->speed_history_.size();
+}
+
+// Apply robust filtering: outlier detection + moving average + Kalman filter
+double LD2415HComponent::apply_robust_filter_(double measured_speed) {
+  // Step 1: Check for outliers
+  if (this->is_speed_outlier_(measured_speed)) {
+    // For outliers, return the current filtered value or moving average
+    if (this->filter_initialized_) {
+      ESP_LOGD(TAG, "Using previous filtered value %.1f instead of outlier %.1f", 
+               this->filtered_speed_, measured_speed);
+      return this->filtered_speed_;
+    } else if (!this->speed_history_.empty()) {
+      double avg = this->calculate_moving_average_();
+      ESP_LOGD(TAG, "Using moving average %.1f instead of outlier %.1f", avg, measured_speed);
+      return avg;
+    }
+    // If we have no history, reluctantly accept even the outlier but log it
+    ESP_LOGW(TAG, "Accepting outlier %.1f km/h due to no history", measured_speed);
+  }
+  
+  // Step 2: Add to history (only non-outliers)
+  if (!this->is_speed_outlier_(measured_speed)) {
+    this->speed_history_.push_back(measured_speed);
+    
+    // Limit history size for memory efficiency
+    if (this->speed_history_.size() > MAX_HISTORY_SIZE) {
+      this->speed_history_.erase(this->speed_history_.begin());
+    }
+  }
+  
+  // Step 3: For small changes, use moving average to reduce noise
+  double moving_avg = this->calculate_moving_average_();
+  double smoothed_speed = measured_speed;
+  
+  if (this->speed_history_.size() >= 3) {
+    // Blend between raw measurement and moving average based on how much it differs
+    double avg_diff = std::abs(measured_speed - moving_avg);
+    if (avg_diff < 5.0) {  // For small differences (< 5 km/h), use more averaging
+      double blend_factor = 0.3;  // 30% new measurement, 70% moving average
+      smoothed_speed = blend_factor * measured_speed + (1.0 - blend_factor) * moving_avg;
+      ESP_LOGV(TAG, "Smoothing: raw=%.1f, avg=%.1f, smoothed=%.1f", 
+               measured_speed, moving_avg, smoothed_speed);
+    }
+  }
+  
+  // Step 4: Apply Kalman filter to the smoothed measurement
+  double filtered_speed = this->apply_kalman_filter_(smoothed_speed);
+  
+  ESP_LOGD(TAG, "Robust filter: raw=%.1f → smoothed=%.1f → filtered=%.1f", 
+           measured_speed, smoothed_speed, filtered_speed);
+  
+  return filtered_speed;
 }
 
 // Process a single speed measurement
@@ -529,8 +640,8 @@ void LD2415HComponent::parse_speed_() {
           // Convert to absolute speed for all processing and reporting
           speed = std::abs(speed);
           
-          // Apply Kalman filtering for noise reduction
-          speed = this->apply_kalman_filter_(speed);
+          // Apply robust filtering (outlier detection + moving average + Kalman)
+          speed = this->apply_robust_filter_(speed);
           
           // Process this measurement
           this->process_single_measurement_(speed, approaching);
@@ -779,24 +890,73 @@ Vehicle* LD2415HComponent::find_or_create_vehicle_(double speed, bool is_approac
   std::vector<Vehicle>& vehicles = is_approaching ? approaching_vehicles_ : departing_vehicles_;
   uint32_t current_time = millis();
   
-  // Look for existing active vehicle in the same direction
+  // Update direction tracking
+  if (is_approaching) {
+    this->last_approaching_time_ = current_time;
+  } else {
+    this->last_departing_time_ = current_time;
+  }
+  
+  // Check for potential overtake situation
+  bool overtake_situation = this->is_potential_overtake_(is_approaching);
+  
+  // Look for existing active vehicle using conservative grouping
+  Vehicle* best_match = nullptr;
+  double best_probability = 0.0;
+  uint32_t best_time_gap = UINT32_MAX;
+  
   for (auto& vehicle : vehicles) {
     if (!vehicle.is_active) continue;
     
-    // Check if this could be the same vehicle (speed difference within threshold)
-    double speed_diff = std::abs(vehicle.last_speed - speed);
-    uint32_t time_diff = current_time - vehicle.last_detection_time;
+    uint32_t time_gap = current_time - vehicle.last_detection_time;
     
-    // If speed jump is too large or too much time has passed, this is likely a new vehicle
-    if (speed_diff > SPEED_JUMP_THRESHOLD || time_diff > VEHICLE_TIMEOUT) {
+    // Skip vehicles that haven't been seen for too long
+    if (time_gap > VEHICLE_TIMEOUT) {
       // Mark current vehicle as finished and publish final data
       this->publish_vehicle_data_(vehicle, true);
       vehicle.is_active = false;
       continue;
     }
     
-    // This appears to be the same vehicle
-    return &vehicle;
+    // Use conservative grouping logic
+    if (this->is_same_vehicle_conservative_(vehicle, speed, time_gap)) {
+      // Calculate probability for this match
+      double probability = this->calculate_vehicle_grouping_probability_(vehicle, speed, time_gap);
+      
+      ESP_LOGV(TAG, "Vehicle #%u match probability: %.2f (speed: %.1f→%.1f, time_gap: %u ms)", 
+               vehicle.id, probability, vehicle.last_speed, speed, time_gap);
+      
+      // Select best match (highest probability, or if tied, most recent)
+      if (probability > best_probability || 
+          (probability == best_probability && time_gap < best_time_gap)) {
+        best_match = &vehicle;
+        best_probability = probability;
+        best_time_gap = time_gap;
+      }
+    }
+  }
+  
+  // Use best match if probability is high enough
+  const double MIN_MATCH_PROBABILITY = overtake_situation ? 0.7 : 0.5;  // Higher threshold during overtakes
+  
+  if (best_match && best_probability >= MIN_MATCH_PROBABILITY) {
+    ESP_LOGD(TAG, "Updated existing %s vehicle #%u: %.1f km/h -> %.1f km/h (probability: %.2f, time gap: %u ms)", 
+             is_approaching ? "approaching" : "departing", best_match->id, 
+             best_match->last_speed, speed, best_probability, best_time_gap);
+    
+    return best_match;
+  }
+  
+  // No good match found - create new vehicle only if speed is significant enough
+  if (speed < MIN_STABLE_SPEED) {
+    ESP_LOGV(TAG, "Speed too low for new vehicle creation: %.1f km/h < %.1f km/h", speed, MIN_STABLE_SPEED);
+    return nullptr;  // Don't create vehicles for very low speeds
+  }
+  
+  // During overtakes, be extra conservative about creating new vehicles
+  if (overtake_situation && speed < MIN_STABLE_SPEED * 2) {
+    ESP_LOGD(TAG, "Overtake situation: not creating new vehicle for low speed %.1f km/h", speed);
+    return nullptr;
   }
   
   // No matching vehicle found, create a new one
@@ -805,6 +965,9 @@ Vehicle* LD2415HComponent::find_or_create_vehicle_(double speed, bool is_approac
   new_vehicle.is_approaching = is_approaching;
   new_vehicle.is_active = true;
   new_vehicle.first_detection_time = current_time;
+  new_vehicle.last_speed = speed;
+  new_vehicle.max_speed = speed;
+  new_vehicle.last_detection_time = current_time;
   
   vehicles.push_back(new_vehicle);
   
@@ -821,8 +984,9 @@ Vehicle* LD2415HComponent::find_or_create_vehicle_(double speed, bool is_approac
     }
   }
   
-  ESP_LOGD(TAG, "New vehicle detected: ID %u, direction: %s", 
-           new_vehicle.id, is_approaching ? "approaching" : "departing");
+  ESP_LOGI(TAG, "New %s vehicle #%u detected: %.1f km/h%s", 
+           is_approaching ? "approaching" : "departing", new_vehicle.id, speed,
+           overtake_situation ? " (during potential overtake)" : "");
   
   return &vehicles.back();
 }
@@ -896,6 +1060,98 @@ void LD2415HComponent::publish_vehicle_data_(const Vehicle& vehicle, bool is_fin
       }
     }
   }
+}
+
+// Conservative vehicle grouping implementation
+bool LD2415HComponent::is_same_vehicle_conservative_(const Vehicle& vehicle, double new_speed, uint32_t time_gap) {
+  // Extremely conservative approach - prefer stability over accuracy
+  
+  // 1. Time gap check - if too much time has passed, it's likely a new vehicle
+  if (time_gap > CONSERVATIVE_TIME_GAP) {
+    ESP_LOGD(TAG, "Time gap too large: %u ms > %u ms - treating as new vehicle", 
+             time_gap, CONSERVATIVE_TIME_GAP);
+    return false;
+  }
+  
+  // 2. Speed change check - if speed changed too much, likely a different vehicle
+  double speed_diff = std::abs(vehicle.last_speed - new_speed);
+  if (speed_diff > CONSERVATIVE_SPEED_THRESHOLD) {
+    ESP_LOGD(TAG, "Speed change too large: %.1f km/h vs %.1f km/h (diff: %.1f) - treating as new vehicle", 
+             vehicle.last_speed, new_speed, speed_diff);
+    return false;
+  }
+  
+  // 3. Minimum detection duration - vehicle must have been detected for minimum time to be "real"
+  uint32_t detection_duration = time_gap + (vehicle.last_detection_time - vehicle.first_detection_time);
+  if (detection_duration < MIN_DETECTION_DURATION) {
+    ESP_LOGV(TAG, "Detection too brief: %u ms < %u ms - might be noise", 
+             detection_duration, MIN_DETECTION_DURATION);
+    // Don't reject immediately, but be more strict on other criteria
+  }
+  
+  // 4. Speed stability check - both speeds should be above minimum threshold
+  if (vehicle.last_speed < MIN_STABLE_SPEED || new_speed < MIN_STABLE_SPEED) {
+    ESP_LOGV(TAG, "Speed too low for stable detection: last=%.1f, new=%.1f (min=%.1f)", 
+             vehicle.last_speed, new_speed, MIN_STABLE_SPEED);
+    return false;
+  }
+  
+  ESP_LOGD(TAG, "Conservative grouping: same vehicle (speed: %.1f→%.1f, time_gap: %u ms)", 
+           vehicle.last_speed, new_speed, time_gap);
+  return true;
+}
+
+bool LD2415HComponent::is_potential_overtake_(bool is_approaching) {
+  uint32_t current_time = millis();
+  
+  // Check if we've seen traffic in both directions recently (potential overtake)
+  bool recent_approaching = (current_time - this->last_approaching_time_) < OVERTAKE_PROTECTION_TIME;
+  bool recent_departing = (current_time - this->last_departing_time_) < OVERTAKE_PROTECTION_TIME;
+  
+  if (recent_approaching && recent_departing) {
+    if (!this->potential_overtake_in_progress_) {
+      ESP_LOGW(TAG, "Potential overtake detected - being extra conservative with vehicle counting");
+      this->potential_overtake_in_progress_ = true;
+    }
+    return true;
+  }
+  
+  // Clear overtake flag if enough time has passed
+  if (this->potential_overtake_in_progress_ && 
+      !recent_approaching && !recent_departing) {
+    ESP_LOGI(TAG, "Overtake situation cleared");
+    this->potential_overtake_in_progress_ = false;
+  }
+  
+  return false;
+}
+
+double LD2415HComponent::calculate_vehicle_grouping_probability_(const Vehicle& vehicle, double new_speed, uint32_t time_gap) {
+  // Calculate probability (0.0 to 1.0) that this is the same vehicle
+  double probability = 1.0;
+  
+  // Time penalty - exponential decay
+  double time_factor = static_cast<double>(time_gap) / CONSERVATIVE_TIME_GAP;
+  probability *= std::exp(-time_factor * 2.0);  // Exponential decay
+  
+  // Speed change penalty
+  double speed_diff = std::abs(vehicle.last_speed - new_speed);
+  double speed_factor = speed_diff / CONSERVATIVE_SPEED_THRESHOLD;
+  probability *= std::exp(-speed_factor * 2.0);  // Exponential decay
+  
+  // Bonus for stable, high-speed detections
+  double min_speed = std::min(vehicle.last_speed, new_speed);
+  if (min_speed > MIN_STABLE_SPEED * 2) {
+    probability *= 1.2;  // 20% bonus for stable detections
+  }
+  
+  // Penalty during potential overtakes
+  if (this->potential_overtake_in_progress_) {
+    probability *= 0.5;  // 50% penalty during overtakes
+    ESP_LOGD(TAG, "Overtake penalty applied: probability reduced to %.2f", probability);
+  }
+  
+  return std::min(probability, 1.0);
 }
 
 }  // namespace ld2415h
