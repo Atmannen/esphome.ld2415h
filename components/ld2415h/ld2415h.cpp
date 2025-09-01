@@ -120,6 +120,20 @@ void LD2415HComponent::loop() {
   int max_bytes_per_loop = this->memory_protection_mode_ ? 5 : 10;  // Reduced from 10:20
   int bytes_processed = 0;
   
+  // Check for buffer timeout - clear stale data
+  static uint32_t last_buffer_activity = 0;
+  if (this->response_buffer_index_ > 0) {
+    if (last_buffer_activity == 0) {
+      last_buffer_activity = current_time;
+    } else if ((current_time - last_buffer_activity) > 1000) {  // 1 second timeout
+      ESP_LOGW(TAG, "UART buffer timeout - clearing stale data (%d chars)", this->response_buffer_index_);
+      this->clear_remaining_buffer_(0);
+      last_buffer_activity = 0;
+    }
+  } else {
+    last_buffer_activity = 0;
+  }
+  
   while (this->available() && bytes_processed < max_bytes_per_loop) {
     uint8_t byte;
     this->read_byte(&byte);
@@ -127,6 +141,9 @@ void LD2415HComponent::loop() {
     
     if (this->fill_buffer_(byte)) {
       this->parse_buffer_();
+      last_buffer_activity = 0;  // Reset timeout after successful parse
+    } else if (this->response_buffer_index_ > 0) {
+      last_buffer_activity = current_time;  // Update activity time
     }
   }
 }
@@ -500,6 +517,23 @@ bool LD2415HComponent::fill_buffer_(char c) {
 
       clear_remaining_buffer_(this->response_buffer_index_);
       ESP_LOGV(TAG, "ASCII response received (%d chars): '%s'", this->response_buffer_index_, this->response_buffer_);
+      
+      // Check for duplicate messages to prevent repeated processing
+      static char last_message[256] = {0};
+      static uint32_t last_message_time = 0;
+      uint32_t current_time = millis();
+      
+      if (strcmp(this->response_buffer_, last_message) == 0 && 
+          (current_time - last_message_time) < 100) {  // Same message within 100ms
+        ESP_LOGV(TAG, "Duplicate message detected, ignoring");
+        return false;  // Don't process duplicate
+      }
+      
+      // Store current message for duplicate detection
+      strncpy(last_message, this->response_buffer_, sizeof(last_message) - 1);
+      last_message[sizeof(last_message) - 1] = '\0';
+      last_message_time = current_time;
+      
       return true;
 
     default:
@@ -510,6 +544,9 @@ bool LD2415HComponent::fill_buffer_(char c) {
         ESP_LOGV(TAG, "Added char '%c' (0x%02X) to buffer at pos %d", c, (uint8_t)c, this->response_buffer_index_ - 1);
       } else {
         ESP_LOGW(TAG, "ASCII response buffer full, dropping character '%c' (0x%02X)", c, (uint8_t)c);
+        // Clear buffer if it's full to prevent getting stuck
+        ESP_LOGW(TAG, "Clearing full buffer to prevent lockup");
+        this->clear_remaining_buffer_(0);
       }
       break;
   }
