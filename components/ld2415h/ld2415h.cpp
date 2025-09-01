@@ -116,8 +116,8 @@ void LD2415HComponent::loop() {
     this->last_max_departing_speed_ = 0;
   }
 
-  // Limit serial processing to prevent long blocking times
-  int max_bytes_per_loop = this->memory_protection_mode_ ? 10 : 20;
+  // Limit serial processing to prevent long blocking times (reduced to prevent overload)
+  int max_bytes_per_loop = this->memory_protection_mode_ ? 5 : 10;  // Reduced from 10:20
   int bytes_processed = 0;
   
   while (this->available() && bytes_processed < max_bytes_per_loop) {
@@ -136,12 +136,17 @@ bool LD2415HComponent::publish_sensor_state_(sensor::Sensor *sensor, float value
     return false;
   }
   
-  // Rate limiting to prevent memory overflow
+  // Enhanced rate limiting to prevent memory overflow and reduce log spam
   uint32_t current_time = millis();
   uint32_t min_interval = this->memory_protection_mode_ ? MEMORY_PROTECTION_INTERVAL : MIN_SENSOR_UPDATE_INTERVAL;
   
   if ((current_time - this->last_sensor_update_time_) < min_interval) {
-    ESP_LOGV(TAG, "Rate limiting sensor update for %s (%.1f)", sensor_name ? sensor_name : "unknown", value);
+    // Reduce spam from rate limiting messages too
+    static uint32_t last_rate_limit_log = 0;
+    if ((current_time - last_rate_limit_log) > 5000) {  // Log rate limiting at most every 5 seconds
+      ESP_LOGV(TAG, "Rate limiting sensor updates (interval: %u ms)", min_interval);
+      last_rate_limit_log = current_time;
+    }
     return false;  // Skip this update to prevent memory pressure
   }
   
@@ -282,6 +287,28 @@ double LD2415HComponent::apply_robust_filter_(double measured_speed) {
 
 // Process a single speed measurement
 void LD2415HComponent::process_single_measurement_(double speed, bool approaching) {
+  // Apply basic debouncing to reduce excessive processing
+  static double last_processed_speed = 0;
+  static bool last_processed_approaching = false;
+  static uint32_t last_process_time = 0;
+  
+  uint32_t current_time = millis();
+  
+  // Only process if speed changed significantly or enough time has passed
+  double speed_change = std::abs(speed - last_processed_speed);
+  bool direction_changed = (approaching != last_processed_approaching);
+  uint32_t time_since_last = current_time - last_process_time;
+  
+  if (speed_change < 2.0 && !direction_changed && time_since_last < 300) {
+    // Skip processing if speed change is minor and direction is same and recent
+    ESP_LOGV(TAG, "Skipping minor speed change: %.1f km/h (change: %.1f)", speed, speed_change);
+    return;
+  }
+  
+  last_processed_speed = speed;
+  last_processed_approaching = approaching;
+  last_process_time = current_time;
+  
   // Update current state for this measurement
   this->speed_ = speed;
   this->approaching_ = approaching;
@@ -959,9 +986,14 @@ Vehicle* LD2415HComponent::find_or_create_vehicle_(double speed, bool is_approac
   const double MIN_MATCH_PROBABILITY = overtake_situation ? 0.7 : 0.5;  // Higher threshold during overtakes
   
   if (best_match && best_probability >= MIN_MATCH_PROBABILITY) {
-    ESP_LOGD(TAG, "Updated existing %s vehicle #%u: %.1f km/h -> %.1f km/h (probability: %.2f, time gap: %u ms)", 
-             is_approaching ? "approaching" : "departing", best_match->id, 
-             best_match->last_speed, speed, best_probability, best_time_gap);
+    // Rate limit vehicle update logs to reduce spam
+    uint32_t current_time = millis();
+    if ((current_time - this->last_vehicle_detection_log_time_) > MIN_LOG_UPDATE_INTERVAL) {
+      ESP_LOGD(TAG, "Updated existing %s vehicle #%u: %.1f km/h -> %.1f km/h (probability: %.2f, time gap: %u ms)", 
+               is_approaching ? "approaching" : "departing", best_match->id, 
+               best_match->last_speed, speed, best_probability, best_time_gap);
+      this->last_vehicle_detection_log_time_ = current_time;
+    }
     
     return best_match;
   }
@@ -1087,16 +1119,26 @@ bool LD2415HComponent::is_same_vehicle_conservative_(const Vehicle& vehicle, dou
   
   // 1. Time gap check - if too much time has passed, it's likely a new vehicle
   if (time_gap > CONSERVATIVE_TIME_GAP) {
-    ESP_LOGD(TAG, "Time gap too large: %u ms > %u ms - treating as new vehicle", 
-             time_gap, CONSERVATIVE_TIME_GAP);
+    // Rate limit these debug messages to reduce log spam
+    uint32_t current_time = millis();
+    if ((current_time - this->last_conservative_log_time_) > MIN_LOG_UPDATE_INTERVAL) {
+      ESP_LOGD(TAG, "Time gap too large: %u ms > %u ms - treating as new vehicle", 
+               time_gap, CONSERVATIVE_TIME_GAP);
+      this->last_conservative_log_time_ = current_time;
+    }
     return false;
   }
   
   // 2. Speed change check - if speed changed too much, likely a different vehicle
   double speed_diff = std::abs(vehicle.last_speed - new_speed);
   if (speed_diff > CONSERVATIVE_SPEED_THRESHOLD) {
-    ESP_LOGD(TAG, "Speed change too large: %.1f km/h vs %.1f km/h (diff: %.1f) - treating as new vehicle", 
-             vehicle.last_speed, new_speed, speed_diff);
+    // Rate limit these debug messages to reduce log spam
+    uint32_t current_time = millis();
+    if ((current_time - this->last_conservative_log_time_) > MIN_LOG_UPDATE_INTERVAL) {
+      ESP_LOGD(TAG, "Speed change too large: %.1f km/h vs %.1f km/h (diff: %.1f) - treating as new vehicle", 
+               vehicle.last_speed, new_speed, speed_diff);
+      this->last_conservative_log_time_ = current_time;
+    }
     return false;
   }
   
@@ -1115,8 +1157,13 @@ bool LD2415HComponent::is_same_vehicle_conservative_(const Vehicle& vehicle, dou
     return false;
   }
   
-  ESP_LOGD(TAG, "Conservative grouping: same vehicle (speed: %.1f→%.1f, time_gap: %u ms)", 
-           vehicle.last_speed, new_speed, time_gap);
+  // Rate limit the "same vehicle" debug messages to reduce log spam
+  uint32_t current_time = millis();
+  if ((current_time - this->last_conservative_log_time_) > MIN_LOG_UPDATE_INTERVAL) {
+    ESP_LOGD(TAG, "Conservative grouping: same vehicle (speed: %.1f→%.1f, time_gap: %u ms)", 
+             vehicle.last_speed, new_speed, time_gap);
+    this->last_conservative_log_time_ = current_time;
+  }
   return true;
 }
 
@@ -1131,6 +1178,7 @@ bool LD2415HComponent::is_potential_overtake_(bool is_approaching) {
     if (!this->potential_overtake_in_progress_) {
       ESP_LOGW(TAG, "Potential overtake detected - being extra conservative with vehicle counting");
       this->potential_overtake_in_progress_ = true;
+      this->overtake_start_time_ = current_time;
     }
     return true;
   }
@@ -1138,8 +1186,10 @@ bool LD2415HComponent::is_potential_overtake_(bool is_approaching) {
   // Clear overtake flag if enough time has passed
   if (this->potential_overtake_in_progress_ && 
       !recent_approaching && !recent_departing) {
-    ESP_LOGI(TAG, "Overtake situation cleared");
+    uint32_t overtake_duration = current_time - this->overtake_start_time_;
+    ESP_LOGI(TAG, "Overtake situation cleared after %u ms", overtake_duration);
     this->potential_overtake_in_progress_ = false;
+    this->overtake_start_time_ = 0;
   }
   
   return false;
@@ -1148,6 +1198,7 @@ bool LD2415HComponent::is_potential_overtake_(bool is_approaching) {
 double LD2415HComponent::calculate_vehicle_grouping_probability_(const Vehicle& vehicle, double new_speed, uint32_t time_gap) {
   // Calculate probability (0.0 to 1.0) that this is the same vehicle
   double probability = 1.0;
+  uint32_t current_time = millis();
   
   // Time penalty - exponential decay
   double time_factor = static_cast<double>(time_gap) / CONSERVATIVE_TIME_GAP;
@@ -1164,10 +1215,19 @@ double LD2415HComponent::calculate_vehicle_grouping_probability_(const Vehicle& 
     probability *= 1.2;  // 20% bonus for stable detections
   }
   
-  // Penalty during potential overtakes
+  // Penalty during potential overtakes (enhanced)
   if (this->potential_overtake_in_progress_) {
-    probability *= 0.5;  // 50% penalty during overtakes
-    ESP_LOGD(TAG, "Overtake penalty applied: probability reduced to %.2f", probability);
+    uint32_t overtake_duration = current_time - this->overtake_start_time_;
+    
+    // Apply stronger penalty for longer overtakes
+    double overtake_penalty = 0.4;  // Base 60% penalty during overtakes
+    if (overtake_duration > 3000) {  // If overtake lasts more than 3 seconds
+      overtake_penalty = 0.2;  // Apply even stronger penalty (80% reduction)
+    }
+    
+    probability *= overtake_penalty;
+    ESP_LOGD(TAG, "Overtake penalty applied: probability reduced to %.2f (duration: %u ms)", 
+             probability, overtake_duration);
   }
   
   return std::min(probability, 1.0);

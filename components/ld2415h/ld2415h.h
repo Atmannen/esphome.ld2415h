@@ -17,15 +17,16 @@ namespace esphome {
 namespace ld2415h {
 
 // Conservative vehicle grouping constants
-static const double CONSERVATIVE_SPEED_THRESHOLD = 8.0;    // 8 km/h max speed change for same vehicle
-static const uint32_t CONSERVATIVE_TIME_GAP = 2000;       // 2 seconds max gap between detections
-static const double MIN_STABLE_SPEED = 3.0;               // Minimum speed to consider stable detection
-static const uint32_t MIN_DETECTION_DURATION = 800;       // Minimum 800ms for valid vehicle
-static const uint32_t OVERTAKE_PROTECTION_TIME = 5000;    // 5 seconds protection against false counting during overtakes
+static const double CONSERVATIVE_SPEED_THRESHOLD = 5.0;    // 5 km/h max speed change for same vehicle (reduced from 8.0)
+static const uint32_t CONSERVATIVE_TIME_GAP = 1500;       // 1.5 seconds max gap between detections (reduced from 2000)
+static const double MIN_STABLE_SPEED = 5.0;               // Minimum speed to consider stable detection (increased from 3.0)
+static const uint32_t MIN_DETECTION_DURATION = 1200;      // Minimum 1.2s for valid vehicle (increased from 800ms)
+static const uint32_t OVERTAKE_PROTECTION_TIME = 8000;    // 8 seconds protection against false counting during overtakes (increased from 5000)
 
-// Rate limiting constants to prevent memory overflow
-static const uint32_t MIN_SENSOR_UPDATE_INTERVAL = 250;   // Minimum 250ms between sensor updates
-static const uint32_t MEMORY_PROTECTION_INTERVAL = 500;   // Extra throttling during memory pressure
+// Rate limiting constants to prevent memory overflow and log spam
+static const uint32_t MIN_SENSOR_UPDATE_INTERVAL = 500;   // Minimum 500ms between sensor updates (increased from 250ms)
+static const uint32_t MEMORY_PROTECTION_INTERVAL = 1000;  // Extra throttling during memory pressure (increased from 500ms)
+static const uint32_t MIN_LOG_UPDATE_INTERVAL = 2000;     // Minimum 2s between similar log messages
 
 enum NegotiationMode : uint8_t { CUSTOM_AGREEMENT = 0x01, STANDARD_PROTOCOL = 0x02 };
 
@@ -196,18 +197,21 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   uint32_t approaching_vehicle_count_{0};
   uint32_t departing_vehicle_count_{0};
   
-  // Conservative vehicle detection thresholds
-  static constexpr double SPEED_JUMP_THRESHOLD = 20.0;  // km/h difference to detect new vehicle
-  static constexpr uint32_t VEHICLE_TIMEOUT = 3000;     // ms without detection before vehicle is considered gone
-  static constexpr double MIN_DETECTION_SPEED = 5.0;    // km/h minimum speed to consider as vehicle
+  // Conservative vehicle detection thresholds (improved)
+  static constexpr double SPEED_JUMP_THRESHOLD = 15.0;  // km/h difference to detect new vehicle (reduced from 20.0)
+  static constexpr uint32_t VEHICLE_TIMEOUT = 2500;     // ms without detection before vehicle is considered gone (reduced from 3000)
+  static constexpr double MIN_DETECTION_SPEED = 8.0;    // km/h minimum speed to consider as vehicle (increased from 5.0)
   
-  // Overtake protection state
+  // Enhanced overtake protection state
   uint32_t last_approaching_time_{0};
   uint32_t last_departing_time_{0};
   bool potential_overtake_in_progress_{false};
+  uint32_t overtake_start_time_{0};  // Track when overtake started
 
-  // Rate limiting to prevent memory overflow
+  // Rate limiting to prevent memory overflow and log spam
   uint32_t last_sensor_update_time_{0};
+  uint32_t last_conservative_log_time_{0};  // Rate limit debug logs
+  uint32_t last_vehicle_detection_log_time_{0};  // Rate limit vehicle detection logs
   bool memory_protection_mode_{false};
 
   // Processing
