@@ -509,32 +509,34 @@ bool LD2415HComponent::fill_buffer_(char c) {
       break;
 
     case '\n':
-      // End of response
-      if (this->response_buffer_index_ == 0) {
-        ESP_LOGV(TAG, "Received newline but buffer is empty, ignoring");
-        break;
-      }
+      {
+        // End of response
+        if (this->response_buffer_index_ == 0) {
+          ESP_LOGV(TAG, "Received newline but buffer is empty, ignoring");
+          break;
+        }
 
-      clear_remaining_buffer_(this->response_buffer_index_);
-      ESP_LOGV(TAG, "ASCII response received (%d chars): '%s'", this->response_buffer_index_, this->response_buffer_);
-      
-      // Check for duplicate messages to prevent repeated processing
-      static char last_message[256] = {0};
-      static uint32_t last_message_time = 0;
-      uint32_t current_time = millis();
-      
-      if (strcmp(this->response_buffer_, last_message) == 0 && 
-          (current_time - last_message_time) < 100) {  // Same message within 100ms
-        ESP_LOGV(TAG, "Duplicate message detected, ignoring");
-        return false;  // Don't process duplicate
+        clear_remaining_buffer_(this->response_buffer_index_);
+        ESP_LOGV(TAG, "ASCII response received (%d chars): '%s'", this->response_buffer_index_, this->response_buffer_);
+        
+        // Check for duplicate messages to prevent repeated processing
+        static char last_message[256] = {0};
+        static uint32_t last_message_time = 0;
+        uint32_t current_time = millis();
+        
+        if (strcmp(this->response_buffer_, last_message) == 0 && 
+            (current_time - last_message_time) < 100) {  // Same message within 100ms
+          ESP_LOGV(TAG, "Duplicate message detected, ignoring");
+          return false;  // Don't process duplicate
+        }
+        
+        // Store current message for duplicate detection
+        strncpy(last_message, this->response_buffer_, sizeof(last_message) - 1);
+        last_message[sizeof(last_message) - 1] = '\0';
+        last_message_time = current_time;
+        
+        return true;
       }
-      
-      // Store current message for duplicate detection
-      strncpy(last_message, this->response_buffer_, sizeof(last_message) - 1);
-      last_message[sizeof(last_message) - 1] = '\0';
-      last_message_time = current_time;
-      
-      return true;
 
     default:
       // Append to response
