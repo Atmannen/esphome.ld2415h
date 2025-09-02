@@ -94,57 +94,92 @@ void LD2415HComponent::dump_config() {
 }
 
 void LD2415HComponent::loop() {
-  // Memory protection and performance optimization
-  this->check_memory_status_();
-  
-  // Clean up inactive vehicles periodically
-  this->cleanup_inactive_vehicles_();
-  
-  // Publish timeout values
-  uint32_t current_time = millis();
-  if (this->approaching_last_max_speed_sensor_ != nullptr &&
-      current_time - this->last_approaching_update_time_ > this->timeout_duration_ &&
-      this->last_max_approaching_speed_ > 0) {
-    this->publish_sensor_state_(this->approaching_last_max_speed_sensor_, last_max_approaching_speed_, "Approaching Last Max Speed Sensor (Timeout)");
-    this->last_max_approaching_speed_ = 0;
-  }
-
-  if (this->departing_last_max_speed_sensor_ != nullptr &&
-      current_time - this->last_departing_update_time_ > this->timeout_duration_ &&
-      this->last_max_departing_speed_ > 0) {
-    this->publish_sensor_state_(this->departing_last_max_speed_sensor_, last_max_departing_speed_, "Departing Last Max Speed Sensor (Timeout)");
-    this->last_max_departing_speed_ = 0;
-  }
-
-  // Limit serial processing to prevent long blocking times (reduced to prevent overload)
-  int max_bytes_per_loop = this->memory_protection_mode_ ? 5 : 10;  // Reduced from 10:20
-  int bytes_processed = 0;
-  
-  // Check for buffer timeout - clear stale data
-  static uint32_t last_buffer_activity = 0;
-  if (this->response_buffer_index_ > 0) {
-    if (last_buffer_activity == 0) {
-      last_buffer_activity = current_time;
-    } else if ((current_time - last_buffer_activity) > 1000) {  // 1 second timeout
-      ESP_LOGW(TAG, "UART buffer timeout - clearing stale data (%d chars)", this->response_buffer_index_);
-      this->clear_remaining_buffer_(0);
-      last_buffer_activity = 0;
-    }
-  } else {
-    last_buffer_activity = 0;
-  }
-  
-  while (this->available() && bytes_processed < max_bytes_per_loop) {
-    uint8_t byte;
-    this->read_byte(&byte);
-    bytes_processed++;
-    
-    if (this->fill_buffer_(byte)) {
+  // Simple UART processing (based on dermodmaster/cptskippy approach)
+  while (this->available()) {
+    if (this->fill_buffer_(this->read())) {
       this->parse_buffer_();
-      last_buffer_activity = 0;  // Reset timeout after successful parse
-    } else if (this->response_buffer_index_ > 0) {
-      last_buffer_activity = current_time;  // Update activity time
     }
+  }
+
+  // Simple vehicle tracking with timeouts (enhanced from dermodmaster)
+  uint32_t now = millis();
+  
+  // Approaching vehicle timeout - publish max speed and count vehicle
+  if (this->approaching_last_max_speed_sensor_ != nullptr &&
+      this->last_max_approaching_speed_ > 0 && 
+      now - this->last_approaching_update_time_ > this->timeout_duration_) {
+    
+    this->approaching_last_max_speed_sensor_->publish_state(this->last_max_approaching_speed_);
+    this->last_approaching_update_time_ = now;
+    this->last_max_approaching_speed_ = 0;
+    
+    // Count completed vehicle
+    this->approaching_vehicle_count_++;
+    if (this->approaching_vehicle_count_sensor_ != nullptr) {
+      this->approaching_vehicle_count_sensor_->publish_state(this->approaching_vehicle_count_);
+    }
+    ESP_LOGD(TAG, "Approaching vehicle completed, count: %d", this->approaching_vehicle_count_);
+  }
+
+  // Departing vehicle timeout - publish max speed and count vehicle  
+  if (this->departing_last_max_speed_sensor_ != nullptr &&
+      this->last_max_departing_speed_ > 0 && 
+      now - this->last_departing_update_time_ > this->timeout_duration_) {
+    
+    this->departing_last_max_speed_sensor_->publish_state(this->last_max_departing_speed_);
+    this->last_departing_update_time_ = now;
+    this->last_max_departing_speed_ = 0;
+    
+    // Count completed vehicle
+    this->departing_vehicle_count_++;
+    if (this->departing_vehicle_count_sensor_ != nullptr) {
+      this->departing_vehicle_count_sensor_->publish_state(this->departing_vehicle_count_);
+    }
+    ESP_LOGD(TAG, "Departing vehicle completed, count: %d", this->departing_vehicle_count_);
+  }
+
+  // Configuration commands (from dermodmaster)
+  if (this->update_speed_angle_sense_) {
+    ESP_LOGD(TAG, "LD2415H_CMD_SET_SPEED_ANGLE_SENSE");
+    this->cmd_speed_angle_sense_[3] = this->min_speed_threshold_;
+    this->cmd_speed_angle_sense_[4] = this->compensation_angle_;
+    this->cmd_speed_angle_sense_[5] = this->sensitivity_;
+    this->issue_command_(this->cmd_speed_angle_sense_, sizeof(this->cmd_speed_angle_sense_));
+    this->update_speed_angle_sense_ = false;
+    return;
+  }
+
+  if (this->update_mode_rate_uom_) {
+    ESP_LOGD(TAG, "LD2415H_CMD_SET_MODE_RATE_UOM");
+    this->cmd_mode_rate_uom_[3] = static_cast<uint8_t>(this->tracking_mode_);
+    this->cmd_mode_rate_uom_[4] = this->sample_rate_;
+    this->issue_command_(this->cmd_mode_rate_uom_, sizeof(this->cmd_mode_rate_uom_));
+    this->update_mode_rate_uom_ = false;
+    return;
+  }
+
+  if (this->update_anti_vib_comp_) {
+    ESP_LOGD(TAG, "LD2415H_CMD_SET_ANTI_VIB_COMP");
+    this->cmd_anti_vib_comp_[3] = this->vibration_correction_;
+    this->issue_command_(this->cmd_anti_vib_comp_, sizeof(this->cmd_anti_vib_comp_));
+    this->update_anti_vib_comp_ = false;
+    return;
+  }
+
+  if (this->update_relay_duration_speed_) {
+    ESP_LOGD(TAG, "LD2415H_CMD_SET_RELAY_DURATION_SPEED");
+    this->cmd_relay_duration_speed_[3] = this->relay_trigger_duration_;
+    this->cmd_relay_duration_speed_[4] = this->relay_trigger_speed_;
+    this->issue_command_(this->cmd_relay_duration_speed_, sizeof(this->cmd_relay_duration_speed_));
+    this->update_relay_duration_speed_ = false;
+    return;
+  }
+
+  if (this->update_config_) {
+    ESP_LOGD(TAG, "LD2415H_CMD_GET_CONFIG");
+    this->issue_command_(this->cmd_config_, sizeof(this->cmd_config_));
+    this->update_config_ = false;
+    return;
   }
 }
 
@@ -503,66 +538,26 @@ bool LD2415HComponent::fill_buffer_(char c) {
   switch (c) {
     case 0x00:
     case 0xFF:
-    case 0x02:  // Add additional control characters to ignore
-      // Ignore these characters
-      ESP_LOGVV(TAG, "Ignoring control character: 0x%02X", (uint8_t)c);
-      break;
-      
     case '\r':
-      // Ignore carriage return, wait for newline
-      ESP_LOGVV(TAG, "Ignoring carriage return");
+      // Ignore these characters (simplified approach like cptskippy)
       break;
 
     case '\n':
-      {
-        // End of response
-        if (this->response_buffer_index_ == 0) {
-          ESP_LOGVV(TAG, "Received newline but buffer is empty, ignoring");
-          break;
-        }
+      // End of response
+      if (this->response_buffer_index_ == 0)
+        break;
 
-        clear_remaining_buffer_(this->response_buffer_index_);
-        ESP_LOGV(TAG, "ASCII response received (%d chars): '%s'", this->response_buffer_index_, this->response_buffer_);
-        
-        // Check for duplicate messages to prevent repeated processing
-        static char last_message[256] = {0};
-        static uint32_t last_message_time = 0;
-        static uint32_t duplicate_count = 0;
-        uint32_t current_time = millis();
-        
-        if (strcmp(this->response_buffer_, last_message) == 0) {
-          // Same message - check timing
-          if ((current_time - last_message_time) < 500) {  // Extended to 500ms
-            duplicate_count++;
-            if (duplicate_count < 3) {  // Log first few duplicates only
-              ESP_LOGD(TAG, "Duplicate message #%d detected, ignoring: '%s'", duplicate_count, this->response_buffer_);
-            }
-            return false;  // Don't process duplicate
-          } else {
-            duplicate_count = 0;  // Reset count after timeout
-          }
-        } else {
-          duplicate_count = 0;  // Different message, reset count
-        }
-        
-        // Store current message for duplicate detection
-        strncpy(last_message, this->response_buffer_, sizeof(last_message) - 1);
-        last_message[sizeof(last_message) - 1] = '\0';
-        last_message_time = current_time;
-        
-        return true;
-      }
+      clear_remaining_buffer_(this->response_buffer_index_);
+      ESP_LOGV(TAG, "Response Received: %s", this->response_buffer_);
+      return true;
 
     default:
       // Append to response
       if (this->response_buffer_index_ < sizeof(this->response_buffer_) - 1) {
         this->response_buffer_[this->response_buffer_index_] = c;
         this->response_buffer_index_++;
-        ESP_LOGVV(TAG, "Added char '%c' (0x%02X) to buffer at pos %d", c, (uint8_t)c, this->response_buffer_index_ - 1);
       } else {
-        ESP_LOGW(TAG, "ASCII response buffer full, dropping character '%c' (0x%02X)", c, (uint8_t)c);
-        // Clear buffer if it's full to prevent getting stuck
-        ESP_LOGW(TAG, "Clearing full buffer to prevent lockup");
+        ESP_LOGW(TAG, "Buffer full, clearing");
         this->clear_remaining_buffer_(0);
       }
       break;
@@ -1285,6 +1280,100 @@ double LD2415HComponent::calculate_vehicle_grouping_probability_(const Vehicle& 
   }
   
   return std::min(probability, 1.0);
+}
+
+// Simplified speed parsing based on dermodmaster's approach
+bool LD2415HComponent::parse_speed_(const std::string& line) {
+  if (line.length() < 6) return false;
+  
+  // Simple speed data format check - look for speed pattern
+  if (line.find("AA FF") == 0 || line.find("AAFF") == 0) {
+    try {
+      // Extract speed value - simplified approach
+      size_t speed_pos = line.find("03 02", 4);  // Look for speed data identifier
+      if (speed_pos != std::string::npos && speed_pos + 10 < line.length()) {
+        std::string speed_hex = line.substr(speed_pos + 6, 4);
+        // Remove spaces if any
+        speed_hex.erase(std::remove(speed_hex.begin(), speed_hex.end(), ' '), speed_hex.end());
+        
+        if (speed_hex.length() >= 4) {
+          uint16_t speed_raw = std::stoi(speed_hex, nullptr, 16);
+          float speed_ms = static_cast<float>(speed_raw) / 100.0f;  // Convert to m/s
+          float speed_kmh = speed_ms * 3.6f;  // Convert to km/h
+          
+          if (speed_kmh > 0.5f && speed_kmh < 250.0f) {  // Reasonable speed range
+            this->handle_speed_detection_(speed_kmh);
+            return true;
+          }
+        }
+      }
+    } catch (const std::exception& e) {
+      ESP_LOGV(TAG, "Speed parsing error: %s", e.what());
+    }
+  }
+  
+  return false;
+}
+
+void LD2415HComponent::handle_speed_detection_(float speed) {
+  uint32_t current_time = millis();
+  
+  // Simple vehicle tracking with timeout
+  if (this->current_vehicle_timeout_ > 0 && 
+      (current_time - this->last_detection_time_) > this->current_vehicle_timeout_) {
+    // Vehicle timed out - finish current vehicle if any
+    if (this->current_vehicle_max_speed_ > 0) {
+      this->finish_current_vehicle_();
+    }
+    this->reset_current_vehicle_();
+  }
+  
+  // Update current vehicle tracking
+  if (this->current_vehicle_max_speed_ == 0) {
+    // Start new vehicle
+    this->current_vehicle_start_time_ = current_time;
+    ESP_LOGD(TAG, "New vehicle detected with speed: %.1f km/h", speed);
+  }
+  
+  // Update max speed and counts
+  if (speed > this->current_vehicle_max_speed_) {
+    this->current_vehicle_max_speed_ = speed;
+  }
+  
+  this->last_detection_time_ = current_time;
+  
+  // Update sensors
+  if (this->speed_sensor_ != nullptr) {
+    this->speed_sensor_->publish_state(speed);
+  }
+  
+  if (this->velocity_sensor_ != nullptr) {
+    this->velocity_sensor_->publish_state(speed / 3.6f);  // m/s
+  }
+}
+
+void LD2415HComponent::finish_current_vehicle_() {
+  if (this->current_vehicle_max_speed_ > 0) {
+    ESP_LOGI(TAG, "Vehicle finished - Max speed: %.1f km/h", this->current_vehicle_max_speed_);
+    
+    // Update vehicle count
+    this->total_vehicle_count_++;
+    
+    // Update sensors with final values
+    if (this->approaching_last_max_speed_sensor_ != nullptr) {
+      this->approaching_last_max_speed_sensor_->publish_state(this->current_vehicle_max_speed_);
+    }
+    
+    if (this->approaching_vehicle_count_sensor_ != nullptr) {
+      this->approaching_vehicle_count_sensor_->publish_state(this->total_vehicle_count_);
+    }
+  }
+}
+
+void LD2415HComponent::reset_current_vehicle_() {
+  this->current_vehicle_max_speed_ = 0;
+  this->current_vehicle_start_time_ = 0;
+  this->last_detection_time_ = 0;
 }
 
 // Memory protection implementation

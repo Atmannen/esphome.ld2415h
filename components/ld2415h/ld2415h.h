@@ -197,6 +197,13 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   uint32_t approaching_vehicle_count_{0};
   uint32_t departing_vehicle_count_{0};
   
+  // Simplified vehicle tracking (dermodmaster approach)
+  float current_vehicle_max_speed_{0};
+  uint32_t current_vehicle_start_time_{0};
+  uint32_t last_detection_time_{0};
+  uint32_t current_vehicle_timeout_{3000};  // 3 second timeout
+  uint32_t total_vehicle_count_{0};
+  
   // Conservative vehicle detection thresholds (improved)
   static constexpr double SPEED_JUMP_THRESHOLD = 15.0;  // km/h difference to detect new vehicle (reduced from 20.0)
   static constexpr uint32_t VEHICLE_TIMEOUT = 2500;     // ms without detection before vehicle is considered gone (reduced from 3000)
@@ -224,6 +231,12 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   void parse_speed_();
   bool parse_hex_speed_packet_(const std::vector<uint8_t> &data);
   void parse_config_param_(char *key, char *value);
+  
+  // Simplified speed parsing (dermodmaster approach)
+  bool parse_speed_(const std::string& line);
+  void handle_speed_detection_(float speed);
+  void finish_current_vehicle_();
+  void reset_current_vehicle_();
   
   // Single measurement processing
   void process_single_measurement_(double speed, bool approaching);
