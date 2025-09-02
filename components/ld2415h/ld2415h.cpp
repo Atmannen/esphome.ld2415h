@@ -1288,16 +1288,35 @@ bool LD2415HComponent::parse_speed_(const std::string& line) {
   
   // Simple speed data format check - look for speed pattern
   if (line.find("AA FF") == 0 || line.find("AAFF") == 0) {
-    try {
-      // Extract speed value - simplified approach
-      size_t speed_pos = line.find("03 02", 4);  // Look for speed data identifier
-      if (speed_pos != std::string::npos && speed_pos + 10 < line.length()) {
-        std::string speed_hex = line.substr(speed_pos + 6, 4);
-        // Remove spaces if any
-        speed_hex.erase(std::remove(speed_hex.begin(), speed_hex.end(), ' '), speed_hex.end());
+    // Extract speed value - simplified approach
+    size_t speed_pos = line.find("03 02", 4);  // Look for speed data identifier
+    if (speed_pos != std::string::npos && speed_pos + 10 < line.length()) {
+      std::string speed_hex = line.substr(speed_pos + 6, 4);
+      // Remove spaces if any
+      speed_hex.erase(std::remove(speed_hex.begin(), speed_hex.end(), ' '), speed_hex.end());
+      
+      if (speed_hex.length() >= 4) {
+        // Manual hex parsing to avoid exceptions
+        uint16_t speed_raw = 0;
+        bool valid_hex = true;
+        for (size_t i = 0; i < 4 && valid_hex; i++) {
+          char c = speed_hex[i];
+          uint8_t digit = 0;
+          if (c >= '0' && c <= '9') {
+            digit = c - '0';
+          } else if (c >= 'A' && c <= 'F') {
+            digit = c - 'A' + 10;
+          } else if (c >= 'a' && c <= 'f') {
+            digit = c - 'a' + 10;
+          } else {
+            valid_hex = false;
+          }
+          if (valid_hex) {
+            speed_raw = (speed_raw << 4) | digit;
+          }
+        }
         
-        if (speed_hex.length() >= 4) {
-          uint16_t speed_raw = std::stoi(speed_hex, nullptr, 16);
+        if (valid_hex) {
           float speed_ms = static_cast<float>(speed_raw) / 100.0f;  // Convert to m/s
           float speed_kmh = speed_ms * 3.6f;  // Convert to km/h
           
@@ -1307,8 +1326,6 @@ bool LD2415HComponent::parse_speed_(const std::string& line) {
           }
         }
       }
-    } catch (const std::exception& e) {
-      ESP_LOGV(TAG, "Speed parsing error: %s", e.what());
     }
   }
   
