@@ -503,16 +503,21 @@ bool LD2415HComponent::fill_buffer_(char c) {
   switch (c) {
     case 0x00:
     case 0xFF:
-    case '\r':
+    case 0x02:  // Add additional control characters to ignore
       // Ignore these characters
-      ESP_LOGV(TAG, "Ignoring character: 0x%02X", (uint8_t)c);
+      ESP_LOGVV(TAG, "Ignoring control character: 0x%02X", (uint8_t)c);
+      break;
+      
+    case '\r':
+      // Ignore carriage return, wait for newline
+      ESP_LOGVV(TAG, "Ignoring carriage return");
       break;
 
     case '\n':
       {
         // End of response
         if (this->response_buffer_index_ == 0) {
-          ESP_LOGV(TAG, "Received newline but buffer is empty, ignoring");
+          ESP_LOGVV(TAG, "Received newline but buffer is empty, ignoring");
           break;
         }
 
@@ -522,12 +527,22 @@ bool LD2415HComponent::fill_buffer_(char c) {
         // Check for duplicate messages to prevent repeated processing
         static char last_message[256] = {0};
         static uint32_t last_message_time = 0;
+        static uint32_t duplicate_count = 0;
         uint32_t current_time = millis();
         
-        if (strcmp(this->response_buffer_, last_message) == 0 && 
-            (current_time - last_message_time) < 100) {  // Same message within 100ms
-          ESP_LOGV(TAG, "Duplicate message detected, ignoring");
-          return false;  // Don't process duplicate
+        if (strcmp(this->response_buffer_, last_message) == 0) {
+          // Same message - check timing
+          if ((current_time - last_message_time) < 500) {  // Extended to 500ms
+            duplicate_count++;
+            if (duplicate_count < 3) {  // Log first few duplicates only
+              ESP_LOGD(TAG, "Duplicate message #%d detected, ignoring: '%s'", duplicate_count, this->response_buffer_);
+            }
+            return false;  // Don't process duplicate
+          } else {
+            duplicate_count = 0;  // Reset count after timeout
+          }
+        } else {
+          duplicate_count = 0;  // Different message, reset count
         }
         
         // Store current message for duplicate detection
@@ -543,7 +558,7 @@ bool LD2415HComponent::fill_buffer_(char c) {
       if (this->response_buffer_index_ < sizeof(this->response_buffer_) - 1) {
         this->response_buffer_[this->response_buffer_index_] = c;
         this->response_buffer_index_++;
-        ESP_LOGV(TAG, "Added char '%c' (0x%02X) to buffer at pos %d", c, (uint8_t)c, this->response_buffer_index_ - 1);
+        ESP_LOGVV(TAG, "Added char '%c' (0x%02X) to buffer at pos %d", c, (uint8_t)c, this->response_buffer_index_ - 1);
       } else {
         ESP_LOGW(TAG, "ASCII response buffer full, dropping character '%c' (0x%02X)", c, (uint8_t)c);
         // Clear buffer if it's full to prevent getting stuck
