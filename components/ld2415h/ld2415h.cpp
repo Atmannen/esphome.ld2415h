@@ -408,8 +408,8 @@ void LD2415HComponent::process_single_measurement_(double speed, bool approachin
     this->publish_sensor_state_(this->velocity_sensor_, this->velocity_, "Velocity Sensor");
   }
   
-  // Process vehicle tracking for this measurement
-  this->process_vehicle_detection_(this->speed_, this->approaching_);
+  // Use simplified vehicle tracking
+  this->handle_speed_detection_(this->speed_);
 }
 
 #ifdef USE_NUMBER
@@ -830,8 +830,8 @@ bool LD2415HComponent::parse_hex_speed_packet_(const std::vector<uint8_t> &data)
     this->publish_sensor_state_(this->velocity_sensor_, this->velocity_, "Velocity Sensor");
   }
 
-  // Process vehicle tracking
-  this->process_vehicle_detection_(this->speed_, this->approaching_);
+  // Use simplified vehicle tracking
+  this->handle_speed_detection_(this->speed_);
   
   return true;
 }
