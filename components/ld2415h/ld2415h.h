@@ -201,7 +201,6 @@ class LD2415HComponent : public Component, public uart::UARTDevice {
   float current_vehicle_max_speed_{0};
   uint32_t current_vehicle_start_time_{0};
   uint32_t last_detection_time_{0};
-  uint32_t current_vehicle_timeout_{3000};  // 3 second timeout
   uint32_t total_vehicle_count_{0};
   
   // Conservative vehicle detection thresholds (improved)

@@ -91,7 +91,7 @@ async def to_code(config):
         num = await number.new_number(
             min_speed_threshold_config,
             min_value=1,
-            max_value=60,
+            max_value=60,  # Per HLK-LD2415H spec: 1-60 km/h
             step=1,
         )
         await cg.register_parented(num, config[CONF_LD2415H_ID])
@@ -100,7 +100,7 @@ async def to_code(config):
         num = await number.new_number(
             compensation_angle_config,
             min_value=0,
-            max_value=90,
+            max_value=90,  # Per HLK-LD2415H spec: 0-90 degrees
             step=1,
         )
         await cg.register_parented(num, config[CONF_LD2415H_ID])
@@ -109,7 +109,7 @@ async def to_code(config):
         num = await number.new_number(
             sensitivity_config,
             min_value=0,
-            max_value=15,
+            max_value=15,  # Per HLK-LD2415H spec: 0-15 (higher = more sensitive)
             step=1,
         )
         await cg.register_parented(num, config[CONF_LD2415H_ID])
@@ -118,7 +118,7 @@ async def to_code(config):
         num = await number.new_number(
             vibration_correction_config,
             min_value=0,
-            max_value=112,
+            max_value=112,  # Per HLK-LD2415H spec: 0-112 (environmental vibration compensation)
             step=1,
         )
         await cg.register_parented(num, config[CONF_LD2415H_ID])
@@ -127,7 +127,7 @@ async def to_code(config):
         num = await number.new_number(
             relay_trigger_duration_config,
             min_value=0,
-            max_value=255,
+            max_value=255,  # Per HLK-LD2415H spec: 0-255 seconds
             step=1,
         )
         await cg.register_parented(num, config[CONF_LD2415H_ID])
@@ -136,7 +136,7 @@ async def to_code(config):
         num = await number.new_number(
             relay_trigger_speed_config,
             min_value=0,
-            max_value=255,
+            max_value=255,  # Per HLK-LD2415H spec: 0-255 km/h trigger threshold
             step=1,
         )
         await cg.register_parented(num, config[CONF_LD2415H_ID])
@@ -145,7 +145,7 @@ async def to_code(config):
         num = await number.new_number(
             timeout_config,
             min_value=0,
-            max_value=2000,
+            max_value=2000,  # Per HLK-LD2415H spec: 0-2000ms (detection timeout)
             step=100,
         )
         await cg.register_parented(num, config[CONF_LD2415H_ID])

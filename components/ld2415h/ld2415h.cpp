@@ -62,6 +62,27 @@ void LD2415HComponent::setup() {
              this->velocity_sensor_->is_internal() ? "true" : "false");
   }
 
+  // Initialize all speed sensors to 0 on startup
+  if (this->speed_sensor_ != nullptr) {
+    this->speed_sensor_->publish_state(0.0f);
+  }
+  if (this->velocity_sensor_ != nullptr) {
+    this->velocity_sensor_->publish_state(0.0f);
+  }
+  if (this->approaching_speed_sensor_ != nullptr) {
+    this->approaching_speed_sensor_->publish_state(0.0f);
+  }
+  if (this->departing_speed_sensor_ != nullptr) {
+    this->departing_speed_sensor_->publish_state(0.0f);
+  }
+  if (this->current_approaching_vehicle_speed_sensor_ != nullptr) {
+    this->current_approaching_vehicle_speed_sensor_->publish_state(0.0f);
+  }
+  if (this->current_departing_vehicle_speed_sensor_ != nullptr) {
+    this->current_departing_vehicle_speed_sensor_->publish_state(0.0f);
+  }
+  ESP_LOGI(TAG, "All speed sensors initialized to 0");
+
 #ifdef USE_NUMBER
   this->min_speed_threshold_number_->publish_state(this->min_speed_threshold_);
   this->compensation_angle_number_->publish_state(this->compensation_angle_);
@@ -136,6 +157,21 @@ void LD2415HComponent::loop() {
       this->departing_vehicle_count_sensor_->publish_state(this->departing_vehicle_count_);
     }
     ESP_LOGD(TAG, "Departing vehicle completed, count: %d", this->departing_vehicle_count_);
+  }
+
+  // Current vehicle timeout - reset speed sensors to 0 when no recent detections
+  // Use a longer timeout (6x the radar timeout) to ensure vehicle has fully passed
+  uint32_t current_vehicle_timeout = this->timeout_duration_ * 6;  // e.g., 500ms * 6 = 3000ms
+  if (current_vehicle_timeout > 0 && this->last_detection_time_ > 0 &&
+      (now - this->last_detection_time_) > current_vehicle_timeout) {
+    
+    ESP_LOGD(TAG, "Vehicle timeout reached (%dms) - resetting speed sensors to 0", current_vehicle_timeout);
+    
+    // Vehicle timed out - finish current vehicle if any
+    if (this->current_vehicle_max_speed_ > 0) {
+      this->finish_current_vehicle_();
+    }
+    this->reset_current_vehicle_();
   }
 
   // Configuration commands (from dermodmaster)
@@ -1335,16 +1371,6 @@ bool LD2415HComponent::parse_speed_(const std::string& line) {
 void LD2415HComponent::handle_speed_detection_(float speed) {
   uint32_t current_time = millis();
   
-  // Simple vehicle tracking with timeout
-  if (this->current_vehicle_timeout_ > 0 && 
-      (current_time - this->last_detection_time_) > this->current_vehicle_timeout_) {
-    // Vehicle timed out - finish current vehicle if any
-    if (this->current_vehicle_max_speed_ > 0) {
-      this->finish_current_vehicle_();
-    }
-    this->reset_current_vehicle_();
-  }
-  
   // Update current vehicle tracking
   if (this->current_vehicle_max_speed_ == 0) {
     // Start new vehicle
@@ -1391,6 +1417,35 @@ void LD2415HComponent::reset_current_vehicle_() {
   this->current_vehicle_max_speed_ = 0;
   this->current_vehicle_start_time_ = 0;
   this->last_detection_time_ = 0;
+  
+  // Reset speed sensors to 0 when no vehicle is detected
+  if (this->speed_sensor_ != nullptr) {
+    this->speed_sensor_->publish_state(0.0f);
+  }
+  
+  if (this->velocity_sensor_ != nullptr) {
+    this->velocity_sensor_->publish_state(0.0f);
+  }
+  
+  // Reset directional speed sensors to 0
+  if (this->approaching_speed_sensor_ != nullptr) {
+    this->approaching_speed_sensor_->publish_state(0.0f);
+  }
+  
+  if (this->departing_speed_sensor_ != nullptr) {
+    this->departing_speed_sensor_->publish_state(0.0f);
+  }
+  
+  // Also reset current vehicle speed sensors to 0
+  if (this->current_approaching_vehicle_speed_sensor_ != nullptr) {
+    this->current_approaching_vehicle_speed_sensor_->publish_state(0.0f);
+  }
+  
+  if (this->current_departing_vehicle_speed_sensor_ != nullptr) {
+    this->current_departing_vehicle_speed_sensor_->publish_state(0.0f);
+  }
+  
+  ESP_LOGD(TAG, "Vehicle tracking reset - all speed sensors set to 0");
 }
 
 // Memory protection implementation
